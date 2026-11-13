@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0a0b;
+  --color-surface: #121214;
+  --color-raised: #1a1a1d;
+  --color-line: #26262a;
+  --color-line-strong: #3a3a40;
+  --color-fg: #f2efe6;
+  --color-muted: #96928a;
+  --color-gold: #c9a24a;
+  --color-gold-soft: #e3c77d;
+  --color-yellow: #ffd23f;
+  --color-ok: #4cc38a;
+  --color-danger: #ef5b5b;
+
+  --font-display: "Bricolage Grotesque", system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
+:root { color-scheme: dark; }
+html { scroll-behavior: smooth; }
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(201, 162, 74, 0.07), transparent 70%),
+    var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--color-yellow); color: #0a0a0b; }
+:focus-visible { outline: 2px solid var(--color-yellow); outline-offset: 2px; }
+
+@utility label { @apply block text-[13px] font-semibold text-muted mb-1.5; }
+@utility field {
+  @apply w-full bg-bg border border-line-strong rounded-lg px-3 py-2.5 text-fg placeholder:text-muted/60
+    transition-colors hover:border-muted/60 focus:border-gold focus:outline-none;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
+    transition-colors disabled:opacity-50 disabled:pointer-events-none;
+}
+@utility btn-primary {
+  @apply btn text-bg;
+  background: linear-gradient(180deg, #ffe48a 0%, #ffd23f 42%, #e2a72c 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(120, 70, 0, 0.25),
+    0 8px 22px -10px rgba(255, 196, 46, 0.7);
+  transition: filter 0.2s, box-shadow 0.2s, transform 0.2s;
+  &:hover {
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.6),
+      inset 0 -1px 0 rgba(120, 70, 0, 0.25),
+      0 12px 30px -10px rgba(255, 196, 46, 0.85);
+  }
+  &:active { transform: translateY(0); filter: brightness(0.98); }
+}
+@utility btn-ghost { @apply btn border border-line-strong text-fg hover:border-gold hover:text-gold-soft; }
+@utility btn-danger { @apply btn border border-danger/40 text-danger hover:bg-danger hover:text-bg; }
+@utility card { @apply bg-surface border border-line rounded-xl; }
+@utility eyebrow { @apply text-[12px] font-semibold uppercase tracking-[0.14em] text-gold; }
+@utility rule-gold { background: linear-gradient(90deg, var(--color-gold), transparent); height: 1px; }
+
+/* Tekstur grain halus di seluruh halaman */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Pola titik, memudar ke tepi */
+@utility bg-dots {
+  background-image: radial-gradient(rgba(242, 239, 230, 0.09) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 70% 60% at 30% 40%, #000 30%, transparent 75%);
+}
+
+/* Garis pembatas emas yang memudar ke samping */
+@utility divider-gold {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(201, 162, 74, 0.45) 30%, rgba(201, 162, 74, 0.45) 70%, transparent);
+}
+
+/* Garis emas di atas tiap bagian */
+@utility section-line {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(201, 162, 74, 0.35) 25%, rgba(201, 162, 74, 0.35) 75%, transparent);
+  }
+}
+
+/* Latar bagian "terang" dengan cahaya emas samar dari atas */
+@utility bg-surface-glow {
+  background:
+    radial-gradient(900px 320px at 50% 0%, rgba(201, 162, 74, 0.07), transparent 70%),
+    var(--color-surface);
+}
+
+/* Panel gradasi emas untuk ajakan bergabung */
+@utility bg-gold-panel {
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(255, 246, 200, 0.85) 0%, transparent 45%),
+    radial-gradient(90% 120% at 100% 100%, rgba(150, 88, 10, 0.55) 0%, transparent 55%),
+    linear-gradient(135deg, #ffdf5e 0%, #f5bd2f 45%, #d4911f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 30px 80px -30px rgba(255, 190, 40, 0.45);
+}
+
+/* Tombol platform */
+@utility btn-platform {
+  @apply flex items-center gap-4 w-full rounded-2xl px-4 py-3.5 sm:px-5 sm:py-4 text-left text-white;
+  transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 10px 24px -12px var(--shadow, rgba(0, 0, 0, 0.5));
+  &:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.07);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 16px 34px -12px var(--shadow, rgba(0, 0, 0, 0.6));
+  }
+}
+@utility btn-roblox {
+  @apply btn-platform;
+  --shadow: rgba(35, 80, 245, 0.75);
+  background: linear-gradient(135deg, #5a86ff 0%, #335fff 50%, #1e3fd8 100%);
+}
+@utility btn-discord {
+  @apply btn-platform;
+  --shadow: rgba(88, 101, 242, 0.75);
+  background: linear-gradient(135deg, #7984ff 0%, #5865f2 50%, #4450d0 100%);
+}
+
+/* Latar dashboard: gradasi emas terang -> emas gelap */
+@utility bg-gold-page {
+  background-color: #8a5a14;
+  background-image:
+    radial-gradient(1100px 520px at 12% -5%, rgba(255, 247, 214, 0.75), transparent 60%),
+    radial-gradient(900px 600px at 100% 100%, rgba(58, 34, 4, 0.7), transparent 65%),
+    linear-gradient(155deg, #f7df92 0%, #e8bd52 28%, #c98f2a 58%, #8a5a14 85%, #5c3a0a 100%);
+  background-attachment: fixed;
+}
+
+/* Tombol gelap untuk di atas latar emas */
+@utility btn-dark {
+  @apply btn bg-bg text-yellow;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 24px -10px rgba(40, 22, 0, 0.7);
+  transition: transform 0.2s, box-shadow 0.2s, background-color 0.2s;
+  &:hover {
+    background-color: var(--color-raised);
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 14px 30px -10px rgba(40, 22, 0, 0.8);
+  }
+}
+
+/* Cahaya emas lembut */
+@utility glow-gold {
+  background: radial-gradient(closest-side, rgba(201, 162, 74, 0.16), transparent);
+  filter: blur(20px);
+}
+
+/* Animasi muncul saat di-scroll */
+.reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.9s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--d, 0ms);
+}
+.reveal.is-in { opacity: 1; transform: none; }
+
+/* Kilau tipis yang lewat saat kartu di-hover */
+@keyframes sheen {
+  from { transform: translateX(-130%) skewX(-18deg); }
+  to { transform: translateX(330%) skewX(-18deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; }
+  html { scroll-behavior: auto; }
+  * { transition: none !important; }
+}

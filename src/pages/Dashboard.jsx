@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useNoIndex } from '../lib/useNoIndex'
 import { fmtDate, num, rupiah } from '../lib/format'
 import {
-  checkOwner, createTransaction, deleteTransaction, listTransactions, signedUrls, updateTransaction,
+  checkOwner, createTransaction, deleteSplit, deleteTransaction, listSplits, listTransactions, ownerDirectory, canVerifyPayment, setTxStatus,
+  signedUrls, splitSaldo, updateTransaction,
 } from '../lib/transactions'
+import SaldoShares from '../components/SaldoShares'
 import TransactionForm from '../components/TransactionForm'
 import ProofViewer from '../components/ProofViewer'
-import Logo from '../components/Logo'
+import DashboardHeader from '../components/DashboardHeader'
 import TopBuyers from '../components/TopBuyers'
 import RobloxAvatar from '../components/RobloxAvatar'
 import { cachedProfile, loadProfiles } from '../lib/roblox'
+import { community } from '../config/community'
 
 const PAGE_SIZE = 20
 
@@ -31,6 +33,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [splits, setSplits] = useState([])
+  const [directory, setDirectory] = useState([]) // [{ id, email, name }] dari user Supabase
+  const [splitting, setSplitting] = useState(false)
+  const [canVerify, setCanVerify] = useState(false) // hanya Thalvior
+  const [statusBusy, setStatusBusy] = useState({}) // { 'id:field': true }
   const [, setProfilesTick] = useState(0) // render ulang setelah foto profil Roblox dimuat
 
   const [month, setMonth] = useState('')
@@ -48,6 +55,14 @@ export default function Dashboard() {
       const data = await listTransactions()
       setRows(data)
       loadProfiles(data).then(() => setProfilesTick((t) => t + 1))
+      // Kalau migrasi 003 belum dijalankan, transaksi tetap tampil
+      const [sp, dir] = await Promise.all([
+        listSplits().catch((e) => { setError(e.message); return [] }),
+        ownerDirectory().catch(() => []),
+      ])
+      setSplits(sp)
+      setDirectory(dir)
+      canVerifyPayment().then(setCanVerify)
       setUrls(await signedUrls(data.map((r) => r.proof_path)))
     } catch (e) {
       setError('Gagal memuat data: ' + e.message)
@@ -83,6 +98,45 @@ export default function Dashboard() {
     return { omzet, robux, count: filtered.length, rate: robux ? (omzet / robux) * 1000 : 0 }
   }, [filtered])
 
+  // Saldo selalu dihitung dari SEMUA transaksi (tidak ikut filter bulan)
+  const totalAll = useMemo(() => rows.reduce((a, r) => a + Number(r.amount), 0), [rows])
+  const splitTotal = splits.reduce((a, s) => a + Number(s.amount), 0)
+  const saldo = totalAll - splitTotal
+  const half = Math.floor(saldo / 2)
+
+  // Nama pencatat: cocokkan ID akun (created_by) dengan user Supabase
+  const nameOf = (row) => {
+    const o = directory.find((d) => (row?.created_by && d.id === row.created_by) ||
+      (row?.created_by_email && d.email.toLowerCase() === row.created_by_email.toLowerCase()))
+    return o?.name || (row?.created_by_email ? row.created_by_email.split('@')[0] : '–')
+  }
+  const myName = nameOf({ created_by: session?.user?.id, created_by_email: session?.user?.email })
+
+  async function handleSplit() {
+    if (half <= 0) return
+    if (!window.confirm(`Bagi 2 saldo ${rupiah(half * 2)}?\n\nJustAxe dan Thalvior masing-masing mendapat ${rupiah(half)}.\nSaldo kembali ke ${rupiah(saldo - half * 2)}.`)) return
+    setSplitting(true)
+    try {
+      const row = await splitSaldo()
+      setSplits((list) => [row, ...list])
+      setNotice(`Saldo dibagi: ${rupiah(row.share)} untuk tiap owner.`)
+    } catch (e) {
+      setError('Gagal membagi saldo: ' + e.message)
+    }
+    setSplitting(false)
+  }
+
+  async function handleUndoSplit(s) {
+    if (!window.confirm(`Batalkan pembagian ${rupiah(s.amount)}?\nUang ${rupiah(s.amount)} kembali ke Saldo.`)) return
+    try {
+      await deleteSplit(s.id)
+      setSplits((list) => list.filter((x) => x.id !== s.id))
+      setNotice('Pembagian dibatalkan.')
+    } catch (e) {
+      setError('Gagal membatalkan: ' + e.message)
+    }
+  }
+
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const shown = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
@@ -93,6 +147,33 @@ export default function Dashboard() {
     setEditing(null)
     load()
   }
+
+  // Ceklis status: langsung berubah di layar, dibatalkan kalau server menolak
+  async function toggleStatus(row, field) {
+    const key = `${row.id}:${field}`
+    if (statusBusy[key]) return
+    const value = !row[field]
+    const label = field === 'payment_verified' ? 'Uang masuk' : 'Diproses'
+    if (!value && !window.confirm(`Hapus ceklis "${label}" untuk transaksi ${row.buyer_username}?`)) return
+    setStatusBusy((b) => ({ ...b, [key]: true }))
+    setRows((list) => list.map((r) => (r.id === row.id ? { ...r, [field]: value } : r)))
+    try {
+      const updated = await setTxStatus(row.id, field, value)
+      setRows((list) => list.map((r) => (r.id === row.id ? updated : r)))
+    } catch (e) {
+      setRows((list) => list.map((r) => (r.id === row.id ? { ...r, [field]: !value } : r)))
+      setError('Gagal mengubah status: ' + e.message)
+    }
+    setStatusBusy((b) => { const n = { ...b }; delete n[key]; return n })
+  }
+
+  const statusProps = (r) => ({
+    row: r,
+    canVerify,
+    busy: statusBusy,
+    onToggle: toggleStatus,
+    nameOfId: (id) => nameOf({ created_by: id }),
+  })
 
   async function handleDelete(row) {
     if (!window.confirm(`Hapus transaksi ${row.buyer_username} (${num(row.robux)} Robux) tanggal ${fmtDate(row.purchase_date)}?\nFoto bukti juga ikut terhapus.`)) return
@@ -108,8 +189,8 @@ export default function Dashboard() {
   function exportCsv() {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const lines = [
-      ['Tanggal', 'Username', 'Nominal', 'Robux', 'Catatan', 'Ada bukti'].join(','),
-      ...filtered.map((r) => [r.purchase_date, esc(r.buyer_username), r.amount, r.robux, esc(r.notes), r.proof_path ? 'ya' : 'tidak'].join(',')),
+      ['Tanggal', 'Username', 'Nominal', 'Robux', 'Catatan', 'Ada bukti', 'Dicatat oleh', 'Uang masuk', 'Diproses'].join(','),
+      ...filtered.map((r) => [r.purchase_date, esc(r.buyer_username), r.amount, r.robux, esc(r.notes), r.proof_path ? 'ya' : 'tidak', esc(nameOf(r)), r.payment_verified ? 'ya' : 'belum', r.processed ? 'ya' : 'belum'].join(',')),
     ]
     const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
@@ -122,21 +203,7 @@ export default function Dashboard() {
   const closeForm = useCallback(() => setEditing(null), [])
   const closeViewer = useCallback(() => setViewing(null), [])
 
-  const header = (
-    <header className="sticky top-0 z-20 bg-bg border-b border-black/40 shadow-lg shadow-black/20">
-      <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Link to="/"><Logo size={28} /></Link>
-          <span className="hidden sm:inline text-line-strong">/</span>
-          <span className="hidden sm:inline text-sm text-muted">Dashboard</span>
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="hidden md:inline text-muted">{session?.user?.email}</span>
-          <button onClick={signOut} className="btn-ghost py-1.5 px-3">Keluar</button>
-        </div>
-      </div>
-    </header>
-  )
+  const header = <DashboardHeader name={directory.length ? myName : ''} email={session?.user?.email} onSignOut={signOut} showTabs={owner !== false} />
 
   if (owner === false) {
     return (
@@ -175,13 +242,29 @@ export default function Dashboard() {
         </div>
 
         {/* Ringkasan */}
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4" aria-label="Ringkasan">
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4" aria-label="Ringkasan">
           <Stat label="Total nominal" value={rupiah(stats.omzet)} accent month={month} />
           <Stat label="Robux terjual" value={`R$ ${num(stats.robux)}`} month={month} />
           <Stat label="Jumlah transaksi" value={num(stats.count)} month={month} />
           <Stat label="Rata-rata / 1.000 R$" value={stats.robux ? rupiah(stats.rate) : '–'}
             sub={stats.robux ? 'Total nominal ÷ Robux × 1.000' : 'Muncul setelah ada transaksi'} month={month} />
+
+          {/* Saldo: total nominal yang belum dibagi */}
+          <div className="col-span-2 lg:col-span-1 rounded-xl p-4 sm:p-5 bg-gradient-to-br from-[#2a2110] via-surface to-surface border border-gold/60 shadow-xl shadow-black/30 flex flex-col">
+            <p className="text-[13px] text-muted">Saldo <span className="text-gold">· belum dibagi</span></p>
+            <p className={`font-display font-bold mt-2 tabular-nums tracking-tight break-words text-2xl sm:text-3xl ${saldo < 0 ? 'text-danger' : 'text-yellow'}`}>
+              {busy ? '…' : rupiah(saldo)}
+            </p>
+            <p className="text-[13px] text-muted mt-1">
+              {saldo < 0 ? 'Minus: ada transaksi dihapus setelah dibagi' : half > 0 ? `${rupiah(half)} / owner` : 'Tidak ada yang bisa dibagi'}
+            </p>
+            <button onClick={handleSplit} disabled={busy || splitting || half <= 0} className="btn-primary mt-3 lg:mt-auto py-2 w-full">
+              {splitting ? 'Membagi…' : 'Bagi 2'}
+            </button>
+          </div>
         </section>
+
+        <SaldoShares splits={splits} directory={directory} rows={rows} loading={busy} onUndo={handleUndoSplit} nameOf={nameOf} />
 
         <TopBuyers rows={filtered} month={month} loading={busy} />
 
@@ -212,7 +295,7 @@ export default function Dashboard() {
           {error && <p role="alert" className="m-4 sm:m-5 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>}
 
           {/* Tabel (desktop) */}
-          <div className="hidden md:block">
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-[15px]">
               <thead>
                 <tr className="text-[12px] uppercase tracking-[0.1em] text-muted border-b border-line">
@@ -221,12 +304,13 @@ export default function Dashboard() {
                   <th className="py-3 px-3 font-semibold text-right">Robux</th>
                   <th className="py-3 px-3 font-semibold text-right">Nominal</th>
                   <th className="py-3 px-3 font-semibold">Bukti</th>
+                  <th className="py-3 px-3 font-semibold">Dicatat oleh</th>
                   <th className="py-3 pr-5"><span className="sr-only">Aksi</span></th>
                 </tr>
               </thead>
               <tbody>
-                {busy && <tr><td colSpan="6" className="py-14 text-center text-muted">Memuat…</td></tr>}
-                {!busy && shown.length === 0 && <tr><td colSpan="6" className="py-14 text-center text-muted"><Empty filtered={rows.length > 0} /></td></tr>}
+                {busy && <tr><td colSpan="7" className="py-14 text-center text-muted">Memuat…</td></tr>}
+                {!busy && shown.length === 0 && <tr><td colSpan="7" className="py-14 text-center text-muted"><Empty filtered={rows.length > 0} /></td></tr>}
                 {!busy && shown.map((r) => (
                   <tr key={r.id} className="border-b border-line last:border-0 hover:bg-raised/60 transition-colors">
                     <td className="py-3.5 pl-5 pr-3 whitespace-nowrap text-muted tabular-nums">{fmtDate(r.purchase_date)}</td>
@@ -234,7 +318,9 @@ export default function Dashboard() {
                     <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums text-gold-soft">R$ {num(r.robux)}</td>
                     <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums font-semibold">{rupiah(r.amount)}</td>
                     <td className="py-3.5 px-3"><Thumb row={r} url={urls[r.proof_path]} onOpen={setViewing} /></td>
+                    <td className="py-3.5 px-3 whitespace-nowrap"><Recorder name={nameOf(r)} /></td>
                     <td className="py-3.5 pr-5 text-right whitespace-nowrap">
+                      <StatusChecks {...statusProps(r)} />
                       <button onClick={() => setEditing(r)} className="px-2.5 py-1.5 rounded-md text-sm font-semibold text-fg hover:bg-raised hover:text-yellow">Edit</button>
                       <button onClick={() => handleDelete(r)} className="px-2.5 py-1.5 rounded-md text-sm text-muted hover:bg-danger/10 hover:text-danger">Hapus</button>
                     </td>
@@ -257,8 +343,10 @@ export default function Dashboard() {
                     <p className="font-semibold whitespace-nowrap tabular-nums">{rupiah(r.amount)}</p>
                   </div>
                   <p className="text-sm text-muted tabular-nums">{fmtDate(r.purchase_date)} · <span className="text-gold-soft">R$ {num(r.robux)}</span></p>
+                  <p className="text-[13px] text-muted mt-0.5">Dicatat oleh <span className="text-fg font-semibold">{nameOf(r)}</span></p>
                   {r.notes && <p className="text-sm text-muted truncate">{r.notes}</p>}
-                  <div className="mt-2.5 flex gap-2 text-sm">
+                  <div className="mt-2.5 flex flex-wrap gap-2 text-sm">
+                    <StatusChecks {...statusProps(r)} />
                     <button onClick={() => setEditing(r)} className="btn-ghost py-1 px-3">Edit</button>
                     <button onClick={() => handleDelete(r)} className="btn-danger py-1 px-3">Hapus</button>
                   </div>
@@ -312,6 +400,72 @@ function Buyer({ r, compact = false }) {
         {!compact && r.notes && <p className="text-[13px] text-muted/80 truncate max-w-[22rem]">{r.notes}</p>}
       </div>
     </div>
+  )
+}
+
+const fmtStamp = (iso) => new Date(iso).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+
+// Dua ceklis di kiri tombol Edit: "Uang masuk" (khusus Thalvior) dan "Diproses" (semua owner)
+function StatusChecks({ row, canVerify, busy, onToggle, nameOfId }) {
+  const paid = row.payment_verified
+  const done = row.processed
+  return (
+    <span className="inline-flex gap-1.5 align-middle mr-1">
+      <CheckPill
+        checked={paid}
+        label="Uang masuk"
+        tone="ok"
+        busy={busy[`${row.id}:payment_verified`]}
+        disabled={!canVerify}
+        title={paid
+          ? `Uang sudah masuk · divalidasi ${nameOfId(row.payment_verified_by)}${row.payment_verified_at ? ', ' + fmtStamp(row.payment_verified_at) : ''}`
+          : canVerify ? 'Tandai uang sudah masuk rekening' : 'Belum divalidasi · hanya Thalvior yang bisa memvalidasi'}
+        onClick={() => onToggle(row, 'payment_verified')}
+      />
+      <CheckPill
+        checked={done}
+        label="Diproses"
+        tone="gold"
+        busy={busy[`${row.id}:processed`]}
+        title={done
+          ? `Sudah diproses · oleh ${nameOfId(row.processed_by)}${row.processed_at ? ', ' + fmtStamp(row.processed_at) : ''}`
+          : 'Tandai transaksi sudah diproses'}
+        onClick={() => onToggle(row, 'processed')}
+      />
+    </span>
+  )
+}
+
+function CheckPill({ checked, label, tone, busy, disabled, title, onClick }) {
+  const on = tone === 'ok'
+    ? 'border-ok/50 bg-ok/15 text-ok'
+    : 'border-gold/60 bg-gold/15 text-yellow'
+  return (
+    <button type="button" role="checkbox" aria-checked={checked} aria-label={label} title={title}
+      onClick={onClick} disabled={disabled || busy}
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed ${
+        checked ? on : 'border-line-strong text-muted hover:text-fg hover:border-fg/40'} ${disabled && !checked ? 'opacity-50' : ''} ${busy ? 'opacity-60' : ''}`}>
+      <span aria-hidden="true" className={`grid place-items-center w-4 h-4 rounded-[5px] border transition-colors ${
+        checked ? (tone === 'ok' ? 'bg-ok border-ok' : 'bg-yellow border-yellow') : 'border-current'}`}>
+        {checked && (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3 text-bg"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z" clipRule="evenodd" /></svg>
+        )}
+      </span>
+      {label}
+      {disabled && !checked && (
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="w-3 h-3"><path fillRule="evenodd" d="M10 2a4 4 0 0 0-4 4v2H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-1V6a4 4 0 0 0-4-4Zm2 6V6a2 2 0 1 0-4 0v2h4Z" clipRule="evenodd" /></svg>
+      )}
+    </button>
+  )
+}
+
+function Recorder({ name }) {
+  const o = community.owners.find((x) => x.name === name)
+  return (
+    <span className="inline-flex items-center gap-2 text-sm">
+      <RobloxAvatar src={o?.photo ? `/images/owners/${o.photo}` : null} name={name} size={24} />
+      <span className={o ? 'font-semibold' : 'text-muted'}>{name}</span>
+    </span>
   )
 }
 

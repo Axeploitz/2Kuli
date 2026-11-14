@@ -2,6 +2,7 @@
 -- duakuli: tabel transaksi Robux + storage bukti transfer
 -- Jalankan di Supabase: SQL Editor > New query > paste semua > Run
 -- Aman dijalankan ulang.
+-- Setelah ini, jalankan juga migration-002-roblox-buyer.sql dan migration-003-saldo-owner.sql
 -- =====================================================================
 
 -- 1) Daftar email yang boleh masuk dashboard (allowlist owner)

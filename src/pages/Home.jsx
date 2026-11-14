@@ -5,10 +5,19 @@ import SmartImage from '../components/SmartImage'
 import ExperienceEvents from '../components/ExperienceEvents'
 import { DiscordIcon, RobloxIcon } from '../components/BrandIcons'
 import Reveal from '../components/Reveal'
+import LatestUpdates from '../components/LatestUpdates'
+import { listPublishedUpdates } from '../lib/updates'
 
 const wrap = 'max-w-6xl mx-auto px-5 sm:px-8'
 
 export default function Home() {
+  // Update dari dashboard owner; bagian ini hanya muncul kalau ada update yang tayang
+  const [updates, setUpdates] = useState([])
+  useEffect(() => { listPublishedUpdates(6).then(setUpdates).catch(() => {}) }, [])
+
+  const navItems = [['#tentang', 'Tentang'], ['#owner', 'Owner'], ['#experience', 'Experience'],
+    ...(updates.length ? [['#update', 'Update']] : []), ['#event', 'Event']]
+
   return (
     <div className="min-h-screen">
       {/* Nav */}
@@ -16,7 +25,7 @@ export default function Home() {
         <div className={`${wrap} h-16 flex items-center justify-between`}>
           <a href="#top" aria-label={`${c.name}, ke atas`}><Logo size={30} /></a>
           <nav className="flex items-center gap-1 sm:gap-2 text-sm font-medium">
-            {[['#tentang', 'Tentang'], ['#owner', 'Owner'], ['#experience', 'Experience'], ['#event', 'Event']].map(([href, t]) => (
+            {navItems.map(([href, t]) => (
               <a key={href} href={href} className="hidden sm:inline px-3 py-2 text-muted hover:text-fg transition-colors">{t}</a>
             ))}
             <a href="#gabung" className="btn-primary ml-2 py-2">Gabung</a>
@@ -117,6 +126,19 @@ export default function Home() {
           </ul>
         </div>
       </section>
+
+      {/* Update */}
+      {updates.length > 0 && (
+        <section id="update" className="section-line relative overflow-hidden isolate">
+          <div aria-hidden="true" className="glow-gold absolute -z-10 -left-48 top-24 w-[600px] h-[600px] opacity-60" />
+          <div className={`${wrap} py-20 sm:py-28`}>
+            <p className="eyebrow mb-4">Update</p>
+            <h2 className="font-display font-bold text-3xl sm:text-4xl tracking-tight mb-3">Kabar terbaru</h2>
+            <p className="text-muted mb-12 max-w-[52ch]">Pengumuman, update game, dan info terbaru dari tim {c.name}.</p>
+            <LatestUpdates updates={updates} />
+          </div>
+        </section>
+      )}
 
       {/* Event */}
       <section id="event" className="section-line bg-surface-glow">

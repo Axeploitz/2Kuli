@@ -8,6 +8,12 @@ function friendly(error) {
   if (/buyer_user_id|buyer_display_name/.test(error?.message || '')) {
     return new Error('Database belum di-update. Jalankan file supabase/migration-002-roblox-buyer.sql di Supabase SQL Editor.')
   }
+  if (/payment_verified|can_verify_payment|\bprocessed\b/.test(error?.message || '')) {
+    return new Error('Database belum di-update. Jalankan file supabase/migration-005-status-transaksi.sql di Supabase SQL Editor.')
+  }
+  if (/saldo_splits|split_saldo|owner_directory|created_by_email/.test(error?.message || '')) {
+    return new Error('Database belum di-update. Jalankan file supabase/migration-003-saldo-owner.sql di Supabase SQL Editor.')
+  }
   return error
 }
 const BUCKET = 'bukti'
@@ -95,4 +101,46 @@ export async function checkOwner() {
   const { data, error } = await supabase.rpc('is_owner')
   if (error) throw error
   return data === true
+}
+
+// ---- Owner & Saldo bagi 2 ----
+
+/** Akun owner dari user Supabase: [{ id, email, name }] */
+export async function ownerDirectory() {
+  const { data, error } = await supabase.rpc('owner_directory')
+  if (error) throw friendly(error)
+  return data || []
+}
+
+export async function listSplits() {
+  const { data, error } = await supabase.from('saldo_splits').select('*').order('created_at', { ascending: false })
+  if (error) throw friendly(error)
+  return data
+}
+
+export async function splitSaldo() {
+  const { data, error } = await supabase.rpc('split_saldo')
+  if (error) throw friendly(error)
+  return data
+}
+
+export async function deleteSplit(id) {
+  const { error } = await supabase.from('saldo_splits').delete().eq('id', id)
+  if (error) throw friendly(error)
+}
+
+// ---- Ceklis status transaksi ----
+
+/** Apakah akun yang login boleh validasi uang masuk (Thalvior) */
+export async function canVerifyPayment() {
+  const { data, error } = await supabase.rpc('can_verify_payment')
+  if (error) return false
+  return data === true
+}
+
+/** field: 'payment_verified' | 'processed' */
+export async function setTxStatus(id, field, value) {
+  const { data, error } = await supabase.from(TABLE).update({ [field]: value }).eq('id', id).select().single()
+  if (error) throw friendly(error)
+  return data
 }

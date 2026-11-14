@@ -15,3 +15,6 @@ export const today = () => {
 
 // "1.250.000" -> 1250000 ; hanya ambil digit
 export const digits = (s) => String(s ?? '').replace(/\D/g, '')
+
+// "14 Nov 2026" dari timestamp ISO
+export const fmtDay = (iso) => new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })

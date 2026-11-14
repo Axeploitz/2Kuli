@@ -36,6 +36,7 @@ export default function Dashboard() {
   const [splits, setSplits] = useState([])
   const [directory, setDirectory] = useState([]) // [{ id, email, name }] dari user Supabase
   const [splitting, setSplitting] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [canVerify, setCanVerify] = useState(false) // hanya Thalvior
   const [statusBusy, setStatusBusy] = useState({}) // { 'id:field': true }
   const [, setProfilesTick] = useState(0) // render ulang setelah foto profil Roblox dimuat
@@ -48,8 +49,10 @@ export default function Dashboard() {
   const [editing, setEditing] = useState(null) // null | 'new' | row
   const [viewing, setViewing] = useState(null) // row
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = refresh di tempat (tabel tidak dikosongkan)
+  const load = useCallback(async (silent = false) => {
+    if (silent) setRefreshing(true)
+    else setLoading(true)
     setError('')
     try {
       const data = await listTransactions()
@@ -68,6 +71,7 @@ export default function Dashboard() {
       setError('Gagal memuat data: ' + e.message)
     }
     setLoading(false)
+    setRefreshing(false)
   }, [])
 
   useEffect(() => {
@@ -145,7 +149,7 @@ export default function Dashboard() {
     else await updateTransaction(editing, values, proof)
     setNotice(editing === 'new' ? 'Transaksi tersimpan.' : 'Perubahan tersimpan.')
     setEditing(null)
-    load()
+    load(true)
   }
 
   // Ceklis status: langsung berubah di layar, dibatalkan kalau server menolak
@@ -156,12 +160,13 @@ export default function Dashboard() {
     const label = field === 'payment_verified' ? 'Uang masuk' : 'Diproses'
     if (!value && !window.confirm(`Hapus ceklis "${label}" untuk transaksi ${row.buyer_username}?`)) return
     setStatusBusy((b) => ({ ...b, [key]: true }))
-    setRows((list) => list.map((r) => (r.id === row.id ? { ...r, [field]: value } : r)))
+    const by = field === 'payment_verified' ? 'payment_verified_by' : 'processed_by'
+    setRows((list) => list.map((r) => (r.id === row.id ? { ...r, [field]: value, [by]: value ? session?.user?.id : null } : r)))
     try {
       const updated = await setTxStatus(row.id, field, value)
       setRows((list) => list.map((r) => (r.id === row.id ? updated : r)))
     } catch (e) {
-      setRows((list) => list.map((r) => (r.id === row.id ? { ...r, [field]: !value } : r)))
+      setRows((list) => list.map((r) => (r.id === row.id ? row : r)))
       setError('Gagal mengubah status: ' + e.message)
     }
     setStatusBusy((b) => { const n = { ...b }; delete n[key]; return n })
@@ -170,6 +175,7 @@ export default function Dashboard() {
   const statusProps = (r) => ({
     row: r,
     canVerify,
+    myId: session?.user?.id,
     busy: statusBusy,
     onToggle: toggleStatus,
     nameOfId: (id) => nameOf({ created_by: id }),
@@ -289,6 +295,12 @@ export default function Dashboard() {
                 {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
             </div>
+            <button onClick={() => load(true)} disabled={busy || refreshing} className="btn-ghost py-2" title="Muat ulang data transaksi">
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`}>
+                <path fillRule="evenodd" d="M15.3 4.7A7 7 0 1 0 17 10a1 1 0 1 0-2 0 5 5 0 1 1-1.46-3.54L12 8h5V3l-1.7 1.7Z" clipRule="evenodd" />
+              </svg>
+              {refreshing ? 'Memuat…' : 'Refresh'}
+            </button>
             <button onClick={exportCsv} disabled={!filtered.length} className="btn-ghost py-2">Export CSV</button>
           </div>
 
@@ -406,9 +418,11 @@ function Buyer({ r, compact = false }) {
 const fmtStamp = (iso) => new Date(iso).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
 // Dua ceklis di kiri tombol Edit: "Uang masuk" (khusus Thalvior) dan "Diproses" (semua owner)
-function StatusChecks({ row, canVerify, busy, onToggle, nameOfId }) {
+function StatusChecks({ row, canVerify, myId, busy, onToggle, nameOfId }) {
   const paid = row.payment_verified
   const done = row.processed
+  // Sudah diproses owner lain → terkunci (hanya yang mencentang yang bisa membatalkan)
+  const lockedDone = done && row.processed_by && row.processed_by !== myId
   return (
     <span className="inline-flex gap-1.5 align-middle mr-1">
       <CheckPill
@@ -425,10 +439,12 @@ function StatusChecks({ row, canVerify, busy, onToggle, nameOfId }) {
       <CheckPill
         checked={done}
         label="Diproses"
+        by={done && row.processed_by ? nameOfId(row.processed_by) : ''}
         tone="gold"
         busy={busy[`${row.id}:processed`]}
+        disabled={lockedDone}
         title={done
-          ? `Sudah diproses · oleh ${nameOfId(row.processed_by)}${row.processed_at ? ', ' + fmtStamp(row.processed_at) : ''}`
+          ? `Diproses oleh ${nameOfId(row.processed_by)}${row.processed_at ? ', ' + fmtStamp(row.processed_at) : ''}${lockedDone ? ' · terkunci, hanya dia yang bisa membatalkan' : ' · klik untuk membatalkan'}`
           : 'Tandai transaksi sudah diproses'}
         onClick={() => onToggle(row, 'processed')}
       />
@@ -436,7 +452,7 @@ function StatusChecks({ row, canVerify, busy, onToggle, nameOfId }) {
   )
 }
 
-function CheckPill({ checked, label, tone, busy, disabled, title, onClick }) {
+function CheckPill({ checked, label, by, tone, busy, disabled, title, onClick }) {
   const on = tone === 'ok'
     ? 'border-ok/50 bg-ok/15 text-ok'
     : 'border-gold/60 bg-gold/15 text-yellow'
@@ -452,7 +468,8 @@ function CheckPill({ checked, label, tone, busy, disabled, title, onClick }) {
         )}
       </span>
       {label}
-      {disabled && !checked && (
+      {by && <span className="font-normal opacity-90">· {by}</span>}
+      {disabled && (
         <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="w-3 h-3"><path fillRule="evenodd" d="M10 2a4 4 0 0 0-4 4v2H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-1V6a4 4 0 0 0-4-4Zm2 6V6a2 2 0 1 0-4 0v2h4Z" clipRule="evenodd" /></svg>
       )}
     </button>

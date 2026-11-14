@@ -40,8 +40,13 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
   const setNum = (k) => (e) => setForm((f) => ({ ...f, [k]: digits(e.target.value) }))
 
+  const [dragging, setDragging] = useState(false)
+
   function pickFile(e) {
-    const f = e.target.files?.[0]
+    acceptFile(e.target.files?.[0])
+  }
+
+  function acceptFile(f) {
     if (!f) return
     if (!f.type.startsWith('image/')) return setError('File bukti harus berupa gambar.')
     if (f.size > 15 * 1024 * 1024) return setError('Ukuran foto maksimal 15 MB.')
@@ -49,6 +54,30 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
     setFile(f)
     setRemoveProof(false)
     setPreview(URL.createObjectURL(f))
+  }
+
+  // Tempel gambar langsung (Ctrl+V / ⌘V), misal screenshot bukti transfer
+  useEffect(() => {
+    function onPaste(e) {
+      if (saving) return
+      const img = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'))
+      if (!img) return // teks biasa: biarkan masuk ke kolom yang sedang aktif
+      e.preventDefault()
+      acceptFile(img)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  })
+
+  function onDrop(e) {
+    e.preventDefault()
+    setDragging(false)
+    acceptFile([...(e.dataTransfer?.files || [])].find((f) => f.type.startsWith('image/')))
+  }
+  const dropProps = {
+    onDragOver: (e) => { e.preventDefault(); setDragging(true) },
+    onDragLeave: () => setDragging(false),
+    onDrop,
   }
 
   function clearFile() {
@@ -144,18 +173,23 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
           <div className="mt-5">
             <span className="label">Foto bukti transaksi</span>
             {preview ? (
-              <div className="rounded-xl border border-line-strong overflow-hidden">
+              <div {...dropProps} className={`rounded-xl border overflow-hidden ${dragging ? 'border-gold ring-2 ring-gold/40' : 'border-line-strong'}`}>
                 <img src={preview} alt="Pratinjau bukti transaksi" className="w-full max-h-64 object-contain bg-bg" />
+                <p className="px-3 py-1.5 text-[12px] text-muted border-t border-line-strong">{file ? 'Gambar baru siap disimpan' : 'Bukti tersimpan'} · tempel ({isMac ? '⌘' : 'Ctrl'}+V) untuk mengganti</p>
                 <div className="flex border-t border-line-strong text-sm font-semibold">
                   <button type="button" onClick={() => fileInput.current?.click()} className="flex-1 py-2.5 hover:bg-raised hover:text-yellow">Ganti foto</button>
                   <button type="button" onClick={clearFile} className="flex-1 py-2.5 border-l border-line-strong text-muted hover:bg-danger/10 hover:text-danger">Hapus foto</button>
                 </div>
               </div>
             ) : (
-              <button type="button" onClick={() => fileInput.current?.click()}
-                className="w-full rounded-xl border border-dashed border-line-strong py-8 text-center hover:border-gold hover:bg-gold/5 transition-colors">
-                <span className="block font-semibold">Pilih atau ambil foto</span>
-                <span className="block mt-1 text-[13px] text-muted">JPG, PNG, WEBP · otomatis diperkecil</span>
+              <button type="button" onClick={() => fileInput.current?.click()} {...dropProps}
+                className={`w-full rounded-xl border border-dashed py-8 px-4 text-center transition-colors ${
+                  dragging ? 'border-gold bg-gold/10' : 'border-line-strong hover:border-gold hover:bg-gold/5'}`}>
+                <span className="block font-semibold">{dragging ? 'Lepaskan untuk menambahkan' : 'Pilih atau ambil foto'}</span>
+                <span className="block mt-1.5 text-[13px] text-muted">
+                  atau <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd> + <Kbd>V</Kbd> untuk tempel gambar · bisa juga seret ke sini
+                </span>
+                <span className="block mt-1 text-[12px] text-muted/70">JPG, PNG, WEBP · otomatis diperkecil</span>
               </button>
             )}
             <input ref={fileInput} type="file" accept="image/*" className="sr-only" onChange={pickFile} tabIndex={-1} />
@@ -173,4 +207,10 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
       </form>
     </div>
   )
+}
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+function Kbd({ children }) {
+  return <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-sans text-[12px] font-semibold text-fg">{children}</kbd>
 }

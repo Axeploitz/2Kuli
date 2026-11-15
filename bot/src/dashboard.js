@@ -182,3 +182,32 @@ export async function getTransactionByRef(ref) {
   const { data } = await supabase.from('robux_transactions').select('*').eq('source_ref', ref).maybeSingle()
   return data
 }
+
+// ---------- Pengaturan (buka/tutup topup, lokasi panel) ----------
+
+export async function getSetting(key, fallback = null) {
+  if (!dashboardEnabled) return fallback
+  const { data, error } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle()
+  if (error) {
+    console.warn(`Baca pengaturan ${key} gagal:`, error.message)
+    return fallback
+  }
+  return data ? data.value : fallback
+}
+
+export async function setSetting(key, value) {
+  if (!dashboardEnabled) return
+  const { error } = await supabase.from('app_settings').upsert({ key, value })
+  if (error) console.warn(`Simpan pengaturan ${key} gagal:`, error.message)
+}
+
+/** onChange(key, value) setiap pengaturan berubah dari website */
+export function watchSettings(onChange) {
+  if (!dashboardEnabled) return
+  supabase
+    .channel('bot-app-settings')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, (payload) => {
+      if (payload.new?.key) Promise.resolve(onChange(payload.new.key, payload.new.value)).catch((e) => console.error('Sync pengaturan gagal:', e.message))
+    })
+    .subscribe()
+}

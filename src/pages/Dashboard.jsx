@@ -6,6 +6,7 @@ import {
   checkOwner, createTransaction, deleteSplit, deleteTransaction, listSplits, listTransactions, ownerDirectory, canVerifyPayment, setTxStatus, setSplitAck,
   signedUrls, splitSaldo, updateTransaction,
 } from '../lib/transactions'
+import TopupToggle from '../components/TopupToggle'
 import SaldoShares, { accountsOf, ackOf } from '../components/SaldoShares'
 import TransactionForm from '../components/TransactionForm'
 import ProofViewer from '../components/ProofViewer'
@@ -279,9 +280,12 @@ export default function Dashboard() {
             <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-bg/60 mb-2">Penjualan</p>
             <h1 className="font-display font-extrabold text-3xl sm:text-4xl tracking-tight text-bg">Transaksi Robux</h1>
           </div>
-          <button onClick={() => setEditing('new')} className="btn-dark px-5 py-3">
-            <span className="text-lg leading-none -mt-0.5">+</span> Transaksi baru
-          </button>
+          <div className="flex flex-wrap items-start gap-3">
+            <TopupToggle nameOfId={(id) => nameOf({ created_by: id })} />
+            <button onClick={() => setEditing('new')} className="btn-dark px-5 py-3">
+              <span className="text-lg leading-none -mt-0.5">+</span> Transaksi baru
+            </button>
+          </div>
         </div>
 
         {/* Ringkasan */}

@@ -9,7 +9,9 @@ import {
 } from './roblox.js'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dashboardEnabled, dashboardNameById, getTransactionByRef, markProcessed, recordTransaction, watchTransactions } from './dashboard.js'
+import {
+  dashboardEnabled, dashboardNameById, getSetting, getTransactionByRef, markProcessed, recordTransaction, setSetting, watchSettings, watchTransactions,
+} from './dashboard.js'
 
 // ---------- Konfigurasi ----------
 const { DISCORD_TOKEN, GUILD_ID, TICKET_CATEGORY_ID } = process.env
@@ -71,6 +73,15 @@ client.once(Events.ClientReady, async (c) => {
   if (!guild) console.error(`Bot belum ada di server ${GUILD_ID}. Undang dulu lewat link ini:`)
   else await registerCommands(guild)
   watchTransactions(syncProcessButton)
+  topupOpen = (await getSetting('topup_open', true)) !== false
+  console.log(topupOpen ? '🟢 Tiket topup: BUKA' : '🔴 Tiket topup: TUTUP')
+  watchSettings(async (key, value) => {
+    if (key !== 'topup_open') return
+    topupOpen = value !== false
+    console.log(topupOpen ? '🟢 Tiket topup dibuka dari website' : '🔴 Tiket topup ditutup dari website')
+    await refreshPanel()
+  })
+  await refreshPanel()
   console.log(dashboardEnabled ? '🔗 Terhubung ke dashboard website (Supabase).' : '⚠️  SUPABASE_SECRET_KEY belum diisi: transaksi belum tercatat otomatis ke dashboard.')
   console.log(existsSync(QRIS_FILE) ? '🧾 QRIS siap.' : `⚠️  QRIS belum ada: taruh gambar di ${QRIS_FILE}`)
   console.log('Link undang bot:', c.generateInvite({ scopes: [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands], permissions: BOT_PERMISSIONS }))
@@ -87,24 +98,52 @@ const AUTO_DISMISS_MS = 10_000
 const autoDismiss = (interaction, ms = AUTO_DISMISS_MS) =>
   setTimeout(() => interaction.deleteReply().catch(() => {}), ms)
 
-function panelMessage() {
+let topupOpen = true
+
+function panelMessage(open = topupOpen) {
+  if (!open) {
+    const embed = new EmbedBuilder()
+      .setColor(RED)
+      .setTitle('Topup Robux · 2Kuli — TUTUP')
+      .setDescription([
+        '🔴 Layanan topup sedang **tutup** untuk sementara.',
+        '',
+        'Panel ini akan **otomatis buka kembali** saat layanan sudah tersedia. Terima kasih sudah menunggu!',
+      ].join('\n'))
+      .setFooter({ text: 'Tiket yang sudah terbuka tetap diproses seperti biasa.' })
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('ticket:open').setLabel('Topup sedang tutup').setEmoji('🔒').setStyle(ButtonStyle.Secondary).setDisabled(true),
+    )
+    return { embeds: [embed], components: [row] }
+  }
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setTitle('Topup Robux · 2Kuli')
     .setDescription([
-      'Mau topup Robux? Klik tombol **Topup** di bawah untuk membuka tiket.',
+      '🟢 Layanan topup sedang **buka**. Klik tombol **Topup** di bawah untuk membuka tiket.',
       '',
       '**Alurnya:**',
       '1. Bot membuat channel khusus untuk kamu',
       '2. Masukkan username Roblox kamu',
-      '3. Bot mengecek apakah kamu sudah join community **2Kuli Project**',
-      '4. Admin melanjutkan proses topup',
+      '3. Bot mengecek apakah kamu sudah join community **2Kuli Project** & eligible payout',
+      '4. Pilih jumlah Robux dan lakukan pembayaran',
+      '5. Owner mengirim Robux ke akunmu',
     ].join('\n'))
     .setFooter({ text: 'Hanya kamu dan admin yang bisa melihat channel tiket.' })
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ticket:open').setLabel('Topup').setEmoji('💎').setStyle(ButtonStyle.Success),
   )
   return { embeds: [embed], components: [row] }
+}
+
+/** Perbarui panel di #ticket-topup sesuai status buka/tutup */
+async function refreshPanel() {
+  const loc = await getSetting('topup_panel', null)
+  if (!loc?.channelId || !loc?.messageId) return
+  const channel = await client.channels.fetch(loc.channelId).catch(() => null)
+  const msg = await channel?.messages.fetch(loc.messageId).catch(() => null)
+  if (!msg) return console.warn('Panel topup tidak ditemukan. Jalankan /setup-tiket lagi.')
+  await msg.edit(panelMessage())
 }
 
 function usernameButtons({ change = false } = {}) {
@@ -211,8 +250,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.customId?.startsWith('testi:')) return await handleTesti(interaction)
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup-tiket') {
-      await interaction.channel.send(panelMessage())
-      await interaction.reply(ephemeral('Panel tiket topup sudah dipasang di channel ini.'))
+      const panel = await interaction.channel.send(panelMessage())
+      await setSetting('topup_panel', { channelId: panel.channelId, messageId: panel.id })
+      await interaction.reply(ephemeral(`Panel tiket topup sudah dipasang (status: ${topupOpen ? 'BUKA' : 'TUTUP'}).`))
       return autoDismiss(interaction, 5000)
     }
 
@@ -247,6 +287,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 async function openTicket(interaction) {
   const { guild, user } = interaction
+  if (!topupOpen) {
+    await interaction.reply(ephemeral('🔴 Maaf, layanan topup sedang **tutup**. Silakan coba lagi nanti ya.'))
+    return autoDismiss(interaction, 15_000)
+  }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral })
 
   // Satu orang satu tiket aktif

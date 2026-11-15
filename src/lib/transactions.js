@@ -113,9 +113,26 @@ export async function ownerDirectory() {
 }
 
 export async function listSplits() {
-  const { data, error } = await supabase.from('saldo_splits').select('*').order('created_at', { ascending: false })
-  if (error) throw friendly(error)
-  return data
+  // Ikut ambil ceklis "sudah diterima" (migrasi 009); kalau belum ada, tanpa ceklis
+  let res = await supabase.from('saldo_splits').select('*, saldo_split_acks(*)').order('created_at', { ascending: false })
+  if (res.error && /saldo_split_acks/.test(res.error.message)) {
+    res = await supabase.from('saldo_splits').select('*').order('created_at', { ascending: false })
+  }
+  if (res.error) throw friendly(res.error)
+  return res.data
+}
+
+/** Ceklis / batal ceklis bagian sendiri untuk satu bagi 2 */
+export async function setSplitAck(splitId, userId, checked) {
+  const q = checked
+    ? supabase.from('saldo_split_acks').insert({ split_id: splitId })
+    : supabase.from('saldo_split_acks').delete().eq('split_id', splitId).eq('user_id', userId)
+  const { error } = await q
+  if (error) {
+    if (/saldo_split_acks/.test(error.message)) throw new Error('Database belum di-update. Jalankan file supabase/migration-009-ceklis-bagi2.sql di Supabase SQL Editor.')
+    if (/row-level security/i.test(error.message)) throw new Error('Kamu hanya bisa menceklis bagianmu sendiri.')
+    throw error
+  }
 }
 
 export async function splitSaldo() {

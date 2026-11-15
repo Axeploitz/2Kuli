@@ -6,3 +6,6 @@ dist
 .DS_Store
 # File gambar asli (besar), tidak dibutuhkan website
 design-assets/
+
+# QRIS pembayaran (jangan di-upload)
+bot/assets/qris.*

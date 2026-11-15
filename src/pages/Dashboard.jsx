@@ -3,10 +3,10 @@ import { useAuth } from '../context/AuthContext'
 import { useNoIndex } from '../lib/useNoIndex'
 import { fmtDate, num, rupiah } from '../lib/format'
 import {
-  checkOwner, createTransaction, deleteSplit, deleteTransaction, listSplits, listTransactions, ownerDirectory, canVerifyPayment, setTxStatus,
+  checkOwner, createTransaction, deleteSplit, deleteTransaction, listSplits, listTransactions, ownerDirectory, canVerifyPayment, setTxStatus, setSplitAck,
   signedUrls, splitSaldo, updateTransaction,
 } from '../lib/transactions'
-import SaldoShares from '../components/SaldoShares'
+import SaldoShares, { accountsOf, ackOf } from '../components/SaldoShares'
 import TransactionForm from '../components/TransactionForm'
 import ProofViewer from '../components/ProofViewer'
 import DashboardHeader from '../components/DashboardHeader'
@@ -14,6 +14,7 @@ import TopBuyers from '../components/TopBuyers'
 import RobloxAvatar from '../components/RobloxAvatar'
 import { cachedProfile, loadProfiles } from '../lib/roblox'
 import { community } from '../config/community'
+import { supabase } from '../lib/supabase'
 
 const PAGE_SIZE = 20
 
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [splits, setSplits] = useState([])
   const [directory, setDirectory] = useState([]) // [{ id, email, name }] dari user Supabase
   const [splitting, setSplitting] = useState(false)
+  const [ackBusy, setAckBusy] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [canVerify, setCanVerify] = useState(false) // hanya Thalvior
   const [statusBusy, setStatusBusy] = useState({}) // { 'id:field': true }
@@ -80,6 +82,23 @@ export default function Dashboard() {
       .catch((e) => { setOwner(false); setLoading(false); setError(e.message) })
   }, [load])
 
+  // Realtime: transaksi baru dari bot Discord / perubahan owner lain langsung muncul tanpa refresh
+  useEffect(() => {
+    if (!owner) return
+    let t
+    const ch = supabase.channel('dashboard-realtime')
+    const refresh = () => {
+      clearTimeout(t)
+      t = setTimeout(() => load(true), 600) // gabungkan perubahan beruntun
+    }
+    // Transaksi, bagi 2, dan ceklis owner lain langsung muncul tanpa refresh
+    for (const table of ['robux_transactions', 'saldo_splits', 'saldo_split_acks']) {
+      ch.on('postgres_changes', { event: '*', schema: 'public', table }, refresh)
+    }
+    ch.subscribe()
+    return () => { clearTimeout(t); supabase.removeChannel(ch) }
+  }, [owner, load])
+
   useEffect(() => { setPage(1) }, [month, q, sort])
 
   useEffect(() => {
@@ -116,13 +135,31 @@ export default function Dashboard() {
   }
   const myName = nameOf({ created_by: session?.user?.id, created_by_email: session?.user?.email })
 
+  // Bagi 2 berikutnya baru boleh setelah bagi 2 terakhir diceklis kedua owner
+  const lastSplit = splits[0]
+  const waitingFor = lastSplit ? accountsOf(directory).filter(({ acc }) => !ackOf(lastSplit, acc)).map(({ owner }) => owner.name) : []
+  const splitLocked = waitingFor.length > 0
+
+  async function handleAck(split, checked) {
+    const me = session?.user?.id
+    setAckBusy(`${split.id}:${me}`)
+    try {
+      await setSplitAck(split.id, me, checked)
+      await load(true)
+      setNotice(checked ? 'Bagianmu ditandai sudah diterima.' : 'Ceklis dibatalkan.')
+    } catch (e) {
+      setError('Gagal menyimpan ceklis: ' + e.message)
+    }
+    setAckBusy('')
+  }
+
   async function handleSplit() {
-    if (half <= 0) return
+    if (half <= 0 || splitLocked) return
     if (!window.confirm(`Bagi 2 saldo ${rupiah(half * 2)}?\n\nJustAxe dan Thalvior masing-masing mendapat ${rupiah(half)}.\nSaldo kembali ke ${rupiah(saldo - half * 2)}.`)) return
     setSplitting(true)
     try {
       const row = await splitSaldo()
-      setSplits((list) => [row, ...list])
+      setSplits((list) => [{ ...row, saldo_split_acks: [] }, ...list])
       setNotice(`Saldo dibagi: ${rupiah(row.share)} untuk tiap owner.`)
     } catch (e) {
       setError('Gagal membagi saldo: ' + e.message)
@@ -264,13 +301,18 @@ export default function Dashboard() {
             <p className="text-[13px] text-muted mt-1">
               {saldo < 0 ? 'Minus: ada transaksi dihapus setelah dibagi' : half > 0 ? `${rupiah(half)} / owner` : 'Tidak ada yang bisa dibagi'}
             </p>
-            <button onClick={handleSplit} disabled={busy || splitting || half <= 0} className="btn-primary mt-3 lg:mt-auto py-2 w-full">
+            {splitLocked && !busy && (
+              <p className="text-[12px] text-gold-soft mt-1.5">🔒 Menunggu ceklis {waitingFor.join(' & ')} untuk bagi 2 #{splits.length}</p>
+            )}
+            <button onClick={handleSplit} disabled={busy || splitting || half <= 0 || splitLocked} className="btn-primary mt-3 lg:mt-auto py-2 w-full"
+              title={splitLocked ? 'Bagi 2 sebelumnya belum diceklis kedua owner' : undefined}>
               {splitting ? 'Membagi…' : 'Bagi 2'}
             </button>
           </div>
         </section>
 
-        <SaldoShares splits={splits} directory={directory} rows={rows} loading={busy} onUndo={handleUndoSplit} nameOf={nameOf} />
+        <SaldoShares splits={splits} directory={directory} rows={rows} loading={busy} onUndo={handleUndoSplit} nameOf={nameOf}
+          myId={session?.user?.id} ackBusy={ackBusy} onAck={handleAck} />
 
         <TopBuyers rows={filtered} month={month} loading={busy} />
 

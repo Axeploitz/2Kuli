@@ -93,6 +93,14 @@ const isStaff = (member) => member?.permissions?.has(PermissionFlagsBits.ManageG
 const canUseTicket = (interaction) => ticketOwnerId(interaction.channel) === interaction.user.id || isStaff(interaction.member)
 const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral })
 
+/** Hapus channel tiket setelah jeda; aman kalau channel sudah terhapus duluan */
+function deleteChannelLater(channel, ms, reason) {
+  if (!channel) return
+  setTimeout(() => {
+    channel.delete(reason).catch((e) => { if (e.code !== 10003) console.error('Hapus channel gagal:', e.message) })
+  }, ms)
+}
+
 // Hapus otomatis balasan "Only you can see this" supaya tidak menumpuk
 const AUTO_DISMISS_MS = 10_000
 const autoDismiss = (interaction, ms = AUTO_DISMISS_MS) =>
@@ -239,7 +247,7 @@ async function afterCheck(interaction, user, outcome, payout) {
   } else if (outcome === 'ineligible') {
     const channel = interaction.channel
     console.log(`Tiket ${channel.name}: ${user.name} tidak eligible (${payout.raw}), ditutup otomatis.`)
-    setTimeout(() => channel.delete(`Buyer ${user.name} belum eligible payout`).catch(console.error), AUTO_CLOSE_SECONDS * 1000)
+    deleteChannelLater(channel, AUTO_CLOSE_SECONDS * 1000, `Buyer ${user.name} belum eligible payout`)
   }
 }
 
@@ -365,8 +373,17 @@ async function submitUsername(interaction) {
   if (!user) {
     return interaction.editReply({
       embeds: [new EmbedBuilder().setColor(RED).setTitle('Username tidak ditemukan')
-        .setDescription(`Akun Roblox **${username}** tidak ditemukan. Pastikan yang dimasukkan adalah **username**, bukan display name.`)],
-      components: [usernameButtons({ change: true })],
+        .setDescription([
+          `Akun Roblox **${username}** tidak ditemukan. Pastikan yang dimasukkan adalah **username**, bukan display name.`,
+          '',
+          'Belum join community **2Kuli Project**? Join dulu lewat tombol di bawah, lalu klik **Ganti username** untuk mencoba lagi.',
+        ].join('\n'))],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setLabel('Join community 2Kuli Project').setStyle(ButtonStyle.Link).setURL(GROUP_URL).setEmoji('🔗'),
+        ),
+        usernameButtons({ change: true }),
+      ],
     })
   }
   const { outcome, payout, ...msg } = await verificationMessage(user)
@@ -403,7 +420,7 @@ async function closeTicket(interaction) {
   if (!canUseTicket(interaction) || !ticketOwnerId(interaction.channel)) return interaction.update({ content: 'Tidak bisa menutup channel ini.', components: [] })
   await interaction.update({ content: 'Menutup tiket…', components: [] })
   await interaction.channel.send(`🔒 Tiket ditutup oleh ${interaction.user}. Channel dihapus dalam 5 detik.`)
-  setTimeout(() => interaction.channel.delete(`Tiket ditutup oleh ${interaction.user.tag}`).catch(console.error), 5000)
+  deleteChannelLater(interaction.channel, 5000, `Tiket ditutup oleh ${interaction.user.tag}`)
 }
 
 // ---------- Pesanan ----------
@@ -496,7 +513,7 @@ async function handleOrder(interaction) {
   if (action === 'reject') {
     await interaction.update({ content: `❌ Dicek manual oleh ${interaction.user}: tidak eligible.`, components: [] })
     await interaction.channel.send('Mohon maaf 🙏 akun kamu **belum memenuhi syarat** menerima payout dari community (minimal 14 hari menjadi member). Silakan buka tiket baru nanti. Tiket ditutup dalam 60 detik.')
-    setTimeout(() => interaction.channel.delete('Buyer tidak eligible (cek manual)').catch(console.error), AUTO_CLOSE_SECONDS * 1000)
+    deleteChannelLater(interaction.channel, AUTO_CLOSE_SECONDS * 1000, 'Buyer tidak eligible (cek manual)')
   }
 }
 
@@ -910,7 +927,7 @@ async function finishTesti(channel, rating, message, auto) {
   if (message) embed.setDescription(`“${message}”`)
   if (auto) embed.setFooter({ text: 'Rating otomatis' })
   const target = await testimoniChannel(channel.guild)
-  await target.send({ embeds: [embed] })
+  await target.send({ content: '@everyone', embeds: [embed], allowedMentions: { parse: ['everyone'] } })
 
   // Tutup tombol rating di tiket
   const prompt = await channel.messages.fetch(state.messageId).catch(() => null)
@@ -924,11 +941,12 @@ async function finishTesti(channel, rating, message, auto) {
 
   // Selesai → tutup tiket otomatis
   await channel.send(`🔒 Pesanan selesai. Tiket ini akan ditutup otomatis dalam ${TICKET_CLOSE_AFTER_TESTI_S} detik. Terima kasih sudah belanja di 2Kuli!`)
-  setTimeout(() => channel.delete('Pesanan selesai (testimoni terkirim)').catch(console.error), TICKET_CLOSE_AFTER_TESTI_S * 1000)
+  deleteChannelLater(channel, TICKET_CLOSE_AFTER_TESTI_S * 1000, 'Pesanan selesai (testimoni terkirim)')
 }
 
 // Jangan sampai bot mati karena satu error
 client.on(Events.Error, (e) => console.error('Discord error:', e))
 process.on('unhandledRejection', (e) => console.error('Unhandled:', e))
+process.on('uncaughtException', (e) => console.error('Uncaught:', e))
 
 client.login(DISCORD_TOKEN)

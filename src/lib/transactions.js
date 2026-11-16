@@ -92,8 +92,10 @@ export async function updateTransaction(existing, values, proof) {
 }
 
 export async function deleteTransaction(row) {
-  const { error } = await supabase.from(TABLE).delete().eq('id', row.id)
+  const { data, error } = await supabase.from(TABLE).delete().eq('id', row.id).select('id')
   if (error) throw error
+  // RLS menolak diam-diam (0 baris): transaksi sudah ikut Bagi 2
+  if (!data?.length) throw new Error('Transaksi ini sudah ikut Bagi 2 sehingga tidak bisa dihapus. Kalau ada salah catat, gunakan Edit.')
   await removeProof(row.proof_path)
 }
 

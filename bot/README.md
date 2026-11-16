@@ -42,6 +42,24 @@ Di channel publik (mis. `#topup`), ketik `/setup-tiket`.
 > supaya bot bisa mengatur izin channel tiket.
 
 ## Catatan
-- Bot hanya online selama `npm start` berjalan. Untuk online 24 jam nanti dipindah ke hosting (Railway/Render/VPS).
 - Cek eligible payout memakai Roblox Open Cloud API key (`ROBLOX_API_KEY`, izin `group:read`, dibuat dari akun alt):
   bot mengambil tanggal join grup dan memastikan buyer sudah member minimal 14 hari.
+
+## Server (VPS DomaiNesia)
+Bot berjalan 24 jam di VPS sebagai service systemd `2kuli-bot` (user `bot`, folder `/opt/2kuli-bot/app`).
+Otomatis nyala lagi kalau crash atau server restart.
+
+- **Update bot** setelah mengubah kode / `.env`: `cd bot && ./deploy.sh`
+- **Lihat log**: `ssh bot2kuli 'journalctl -u 2kuli-bot -f'`
+- **Restart**: `ssh bot2kuli 'systemctl restart 2kuli-bot'`
+
+SSH memakai kunci `~/.ssh/oracle_2kuli` (login password dimatikan), port 22 dan 443
+(443 untuk jaringan yang memblokir port 22). Alias di `~/.ssh/config`:
+```
+Host bot2kuli
+  HostName <IP VPS>
+  User root
+  Port 443
+  IdentityFile ~/.ssh/oracle_2kuli
+```
+Jangan menjalankan `npm start` di laptop selama bot di VPS aktif (dua bot = tombol error).

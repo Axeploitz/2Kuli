@@ -4,11 +4,11 @@
   "type": "module",
   "description": "Bot Discord 2Kuli: tiket topup Robux + cek member grup Roblox",
   "scripts": {
-    "start": "node --env-file=.env src/index.js",
-    "dev": "node --env-file=.env --watch src/index.js"
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js"
   },
   "engines": {
-    "node": ">=20.6"
+    "node": ">=22.9"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",

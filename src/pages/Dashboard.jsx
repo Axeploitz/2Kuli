@@ -136,6 +136,11 @@ export default function Dashboard() {
   }
   const myName = nameOf({ created_by: session?.user?.id, created_by_email: session?.user?.email })
 
+  // Transaksi yang dibuat sebelum Bagi 2 terakhir sudah ikut dibagi → tidak bisa dihapus
+  const lastSplitAt = splits[0]?.created_at
+  const inSplit = (r) => !!lastSplitAt && r.created_at <= lastSplitAt
+  const LOCKED_TIP = 'Sudah ikut Bagi 2, tidak bisa dihapus. Gunakan Edit kalau ada salah catat.'
+
   // Bagi 2 berikutnya baru boleh setelah bagi 2 terakhir diceklis kedua owner
   const lastSplit = splits[0]
   const waitingFor = lastSplit ? accountsOf(directory).filter(({ acc }) => !ackOf(lastSplit, acc)).map(({ owner }) => owner.name) : []
@@ -380,7 +385,10 @@ export default function Dashboard() {
                     <td className="py-3.5 pr-5 text-right whitespace-nowrap">
                       <StatusChecks {...statusProps(r)} />
                       <button onClick={() => setEditing(r)} className="px-2.5 py-1.5 rounded-md text-sm font-semibold text-fg hover:bg-raised hover:text-yellow">Edit</button>
-                      <button onClick={() => handleDelete(r)} className="px-2.5 py-1.5 rounded-md text-sm text-muted hover:bg-danger/10 hover:text-danger">Hapus</button>
+                      <button onClick={() => handleDelete(r)} disabled={inSplit(r)} title={inSplit(r) ? LOCKED_TIP : undefined}
+                        className="px-2.5 py-1.5 rounded-md text-sm text-muted hover:bg-danger/10 hover:text-danger disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted disabled:cursor-not-allowed">
+                        {inSplit(r) ? '🔒 Hapus' : 'Hapus'}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -406,7 +414,8 @@ export default function Dashboard() {
                   <div className="mt-2.5 flex flex-wrap gap-2 text-sm">
                     <StatusChecks {...statusProps(r)} />
                     <button onClick={() => setEditing(r)} className="btn-ghost py-1 px-3">Edit</button>
-                    <button onClick={() => handleDelete(r)} className="btn-danger py-1 px-3">Hapus</button>
+                    <button onClick={() => handleDelete(r)} disabled={inSplit(r)} title={inSplit(r) ? LOCKED_TIP : undefined}
+                      className="btn-danger py-1 px-3 disabled:opacity-40 disabled:cursor-not-allowed">{inSplit(r) ? '🔒 Hapus' : 'Hapus'}</button>
                   </div>
                 </div>
               </li>

@@ -58,9 +58,19 @@ async function removeProof(path) {
  * values: { purchase_date, buyer_username, amount, robux, notes }
  * proof:  { file?: File, remove?: boolean }
  */
+// Migrasi 012 belum dijalankan → kolom "via" belum ada; simpan tanpa kolom itu
+async function withoutViaFallback(run, values) {
+  let res = await run(values)
+  if (res.error && /\bvia\b/.test(res.error.message)) {
+    const { via: _via, ...rest } = values
+    res = await run(rest)
+  }
+  return res
+}
+
 export async function createTransaction(values, proof) {
   const proof_path = proof?.file ? await uploadProof(proof.file) : null
-  const { data, error } = await supabase.from(TABLE).insert({ ...values, proof_path }).select().single()
+  const { data, error } = await withoutViaFallback((v) => supabase.from(TABLE).insert({ ...v, proof_path }).select().single(), values)
   if (error) {
     await removeProof(proof_path)
     throw friendly(error)
@@ -77,12 +87,10 @@ export async function updateTransaction(existing, values, proof) {
   } else if (proof?.remove) {
     proof_path = null
   }
-  const { data, error } = await supabase
-    .from(TABLE)
-    .update({ ...values, proof_path })
-    .eq('id', existing.id)
-    .select()
-    .single()
+  const { data, error } = await withoutViaFallback(
+    (v) => supabase.from(TABLE).update({ ...v, proof_path }).eq('id', existing.id).select().single(),
+    values,
+  )
   if (error) {
     await removeProof(newPath)
     throw friendly(error)

@@ -10,6 +10,7 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
     amount: initial ? String(Math.round(initial.amount)) : '',
     robux: initial ? String(initial.robux) : '',
     notes: initial?.notes ?? '',
+    via: initial?.via ?? 'payout',
   }))
   // Akun Roblox buyer yang dipilih. Transaksi lama tanpa ID: user diminta memilih ulang.
   const [buyer, setBuyer] = useState(() => {
@@ -107,6 +108,7 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
           amount,
           robux,
           notes: form.notes.trim() || null,
+          via: form.via,
         },
         { file, remove: removeProof && !file }
       )
@@ -163,6 +165,19 @@ export default function TransactionForm({ initial, proofUrl, onCancel, onSubmit 
           {rate !== null && (
             <p className="mt-3 text-[13px] text-muted">Rate <span className="text-gold-soft font-semibold">{rupiah(rate)}</span> per 1.000 Robux</p>
           )}
+
+          <div className="mt-4">
+            <span className="label">Metode topup</span>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Metode topup">
+              {[['payout', '🏛️ Via Payouts', 'Tercatat di log Payouts saat Diproses'], ['username', '👤 Via Username', 'Kirim langsung ke akun']].map(([v, t, d]) => (
+                <button key={v} type="button" role="radio" aria-checked={form.via === v} onClick={() => setForm((f) => ({ ...f, via: v }))}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${form.via === v ? 'border-gold bg-gold/10' : 'border-line-strong hover:border-gold/50'}`}>
+                  <span className="block text-sm font-semibold">{t}</span>
+                  <span className="block text-[12px] text-muted">{d}</span>
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="mt-4">
             <label className="label" htmlFor="f-notes">Catatan <span className="font-normal text-muted/70">(opsional)</span></label>

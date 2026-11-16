@@ -47,6 +47,7 @@ export default function Dashboard() {
   const [month, setMonth] = useState('')
   const [q, setQ] = useState('')
   const [sort, setSort] = useState('date-desc')
+  const [viaFilter, setViaFilter] = useState('') // '' | payout | username
   const [page, setPage] = useState(1)
 
   const [editing, setEditing] = useState(null) // null | 'new' | row
@@ -100,7 +101,7 @@ export default function Dashboard() {
     return () => { clearTimeout(t); supabase.removeChannel(ch) }
   }, [owner, load])
 
-  useEffect(() => { setPage(1) }, [month, q, sort])
+  useEffect(() => { setPage(1) }, [month, q, sort, viaFilter])
 
   useEffect(() => {
     if (!notice) return
@@ -112,9 +113,10 @@ export default function Dashboard() {
     const needle = q.trim().toLowerCase()
     return rows
       .filter((r) => (!month || r.purchase_date.startsWith(month)))
+      .filter((r) => (!viaFilter || (r.via || 'payout') === viaFilter))
       .filter((r) => (!needle || r.buyer_username.toLowerCase().includes(needle) || (r.buyer_display_name || '').toLowerCase().includes(needle) || (r.notes || '').toLowerCase().includes(needle)))
       .sort(SORTS[sort].fn)
-  }, [rows, month, q, sort])
+  }, [rows, month, q, sort, viaFilter])
 
   const stats = useMemo(() => {
     const omzet = filtered.reduce((a, r) => a + Number(r.amount), 0)
@@ -238,8 +240,8 @@ export default function Dashboard() {
   function exportCsv() {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const lines = [
-      ['Tanggal', 'Username', 'Nominal', 'Robux', 'Catatan', 'Ada bukti', 'Dicatat oleh', 'Uang masuk', 'Diproses'].join(','),
-      ...filtered.map((r) => [r.purchase_date, esc(r.buyer_username), r.amount, r.robux, esc(r.notes), r.proof_path ? 'ya' : 'tidak', esc(nameOf(r)), r.payment_verified ? 'ya' : 'belum', r.processed ? 'ya' : 'belum'].join(',')),
+      ['Tanggal', 'Username', 'Nominal', 'Robux', 'Catatan', 'Ada bukti', 'Dicatat oleh', 'Uang masuk', 'Diproses', 'Metode'].join(','),
+      ...filtered.map((r) => [r.purchase_date, esc(r.buyer_username), r.amount, r.robux, esc(r.notes), r.proof_path ? 'ya' : 'tidak', esc(nameOf(r)), r.payment_verified ? 'ya' : 'belum', r.processed ? 'ya' : 'belum', r.via === 'username' ? 'Via Username' : 'Via Payouts'].join(',')),
     ]
     const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
@@ -341,6 +343,14 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex-1 sm:flex-none">
+              <label className="label" htmlFor="via">Kategori</label>
+              <select id="via" value={viaFilter} onChange={(e) => setViaFilter(e.target.value)} className="field py-2 w-full sm:w-auto pr-8">
+                <option value="">Semua</option>
+                <option value="payout">🏛️ Via Payouts</option>
+                <option value="username">👤 Via Username</option>
+              </select>
+            </div>
+            <div className="flex-1 sm:flex-none">
               <label className="label" htmlFor="sort">Urutkan</label>
               <select id="sort" value={sort} onChange={(e) => setSort(e.target.value)} className="field py-2 w-full sm:w-auto pr-8">
                 {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -377,7 +387,7 @@ export default function Dashboard() {
                 {!busy && shown.map((r) => (
                   <tr key={r.id} className="border-b border-line last:border-0 hover:bg-raised/60 transition-colors">
                     <td className="py-3.5 pl-5 pr-3 whitespace-nowrap text-muted tabular-nums">{fmtDate(r.purchase_date)}</td>
-                    <td className="py-3.5 px-3"><Buyer r={r} /></td>
+                    <td className="py-3.5 px-3"><Buyer r={r} /><ViaBadge via={r.via} /></td>
                     <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums text-gold-soft">R$ {num(r.robux)}</td>
                     <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums font-semibold">{rupiah(r.amount)}</td>
                     <td className="py-3.5 px-3"><Thumb row={r} url={urls[r.proof_path]} onOpen={setViewing} /></td>
@@ -405,7 +415,7 @@ export default function Dashboard() {
                 <Thumb row={r} url={urls[r.proof_path]} onOpen={setViewing} />
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between gap-3">
-                    <Buyer r={r} compact />
+                    <div className="min-w-0"><Buyer r={r} compact /><ViaBadge via={r.via} /></div>
                     <p className="font-semibold whitespace-nowrap tabular-nums">{rupiah(r.amount)}</p>
                   </div>
                   <p className="text-sm text-muted tabular-nums">{fmtDate(r.purchase_date)} · <span className="text-gold-soft">R$ {num(r.robux)}</span></p>
@@ -528,6 +538,16 @@ function CheckPill({ checked, label, by, tone, busy, disabled, title, onClick })
         <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="w-3 h-3"><path fillRule="evenodd" d="M10 2a4 4 0 0 0-4 4v2H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-1V6a4 4 0 0 0-4-4Zm2 6V6a2 2 0 1 0-4 0v2h4Z" clipRule="evenodd" /></svg>
       )}
     </button>
+  )
+}
+
+function ViaBadge({ via }) {
+  const u = via === 'username'
+  return (
+    <span className={`mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold ${u ? 'bg-[#1a2c4a] text-[#8cb8ff]' : 'bg-gold/15 text-gold-soft'}`}
+      title={u ? 'Dikirim langsung ke akun (memotong Stock Username)' : 'Dikirim lewat payout community (memotong Stock Group)'}>
+      {u ? '👤 Via Username' : '🏛️ Via Payouts'}
+    </span>
   )
 }
 

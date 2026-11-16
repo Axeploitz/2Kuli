@@ -30,6 +30,10 @@ const GOLD = 0xc9a24a
 const GREEN = 0x3fb950
 const RED = 0xe5534b
 const TOPIC_PREFIX = 'Tiket topup · uid:'
+const VIA_LABEL = { payout: 'Via Payouts', username: 'Via Username' }
+const VIA_EMOJI = { payout: '🏛️', username: '👤' }
+// Via Username bisa dinonaktifkan sementara (VIA_USERNAME_ENABLED=false) — tampil "segera hadir" seperti QRIS
+const VIA_USERNAME_ENABLED = !/^(0|false|no|tidak)$/i.test(process.env.VIA_USERNAME_ENABLED || 'true')
 
 const BOT_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
@@ -88,6 +92,8 @@ client.once(Events.ClientReady, async (c) => {
 })
 
 // ---------- Helper ----------
+/** Metode topup tiket ini (dari topic channel): 'payout' | 'username' */
+const ticketVia = (channel) => (/via:(payout|username)/.exec(channel?.topic || '')?.[1]) || 'payout'
 const ticketOwnerId = (channel) => channel?.topic?.startsWith(TOPIC_PREFIX) ? channel.topic.slice(TOPIC_PREFIX.length).split(' ')[0] : null
 const isStaff = (member) => member?.permissions?.has(PermissionFlagsBits.ManageGuild) || STAFF_ROLES.some((r) => member?.roles?.cache?.has(r))
 const canUseTicket = (interaction) => ticketOwnerId(interaction.channel) === interaction.user.id || isStaff(interaction.member)
@@ -120,26 +126,33 @@ function panelMessage(open = topupOpen) {
       ].join('\n'))
       .setFooter({ text: 'Tiket yang sudah terbuka tetap diproses seperti biasa.' })
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('ticket:open').setLabel('Topup sedang tutup').setEmoji('🔒').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder().setCustomId('ticket:open:closed').setLabel('Topup sedang tutup').setEmoji('🔒').setStyle(ButtonStyle.Secondary).setDisabled(true),
     )
     return { embeds: [embed], components: [row] }
   }
+  const list = (via) => PRICES[via].map(([r, p]) => `\`${r.toLocaleString('id-ID').padStart(6)}R\` ${rupiah(p)}`).join('\n')
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setTitle('Topup Robux · 2Kuli')
     .setDescription([
-      '🟢 Layanan topup sedang **buka**. Klik tombol **Topup** di bawah untuk membuka tiket.',
+      '🟢 Layanan topup sedang **buka**. Pilih metode di bawah, lalu masukkan username Roblox kamu.',
       '',
-      '**Alurnya:**',
-      '1. Bot membuat channel khusus untuk kamu',
-      '2. Masukkan username Roblox kamu',
-      '3. Bot mengecek apakah kamu sudah join community **2Kuli Project** & eligible payout',
-      '4. Pilih jumlah Robux dan lakukan pembayaran',
-      '5. Owner mengirim Robux ke akunmu',
+      `${VIA_EMOJI.payout} **Via Payouts**: Robux dikirim lewat payout community **2Kuli Project** (wajib join min. 14 hari).`,
+      VIA_USERNAME_ENABLED
+        ? `${VIA_EMOJI.username} **Via Username**: Robux dikirim langsung ke akunmu, cukup username Roblox (tanpa syarat community).`
+        : `${VIA_EMOJI.username} **Via Username**: *segera hadir*, untuk sementara belum tersedia.`,
     ].join('\n'))
+    .addFields(
+      { name: `${VIA_EMOJI.payout} Via Payouts`, value: list('payout'), inline: true },
+      { name: `${VIA_EMOJI.username} Via Username${VIA_USERNAME_ENABLED ? '' : ' (segera hadir)'}`, value: list('username'), inline: true },
+    )
     .setFooter({ text: 'Hanya kamu dan admin yang bisa melihat channel tiket.' })
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket:open').setLabel('Topup').setEmoji('💎').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('ticket:open:username').setEmoji(VIA_EMOJI.username)
+      .setLabel(VIA_USERNAME_ENABLED ? 'Topup Via Username' : 'Via Username (segera hadir)')
+      .setStyle(VIA_USERNAME_ENABLED ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(!VIA_USERNAME_ENABLED),
+    new ButtonBuilder().setCustomId('ticket:open:payout').setLabel('Topup Via Payouts').setEmoji(VIA_EMOJI.payout).setStyle(ButtonStyle.Success),
   )
   return { embeds: [embed], components: [row] }
 }
@@ -175,14 +188,27 @@ const AUTO_CLOSE_SECONDS = 60
  * Cek username → member grup → eligible payout.
  * outcome: 'not-member' | 'eligible' | 'ineligible' | 'unchecked'
  */
-async function verificationMessage(user) {
+async function verificationMessage(user, via = 'payout') {
+  if (via === 'username') {
+    const avatar = await headshot(user.id)
+    const embed = new EmbedBuilder()
+      .setColor(GREEN)
+      .setAuthor({ name: 'Cek akun Roblox · Via Username' })
+      .setTitle(`${user.displayName} (@${user.name})`)
+      .setURL(profileUrl(user.id))
+      .addFields({ name: 'User ID', value: String(user.id), inline: true }, { name: 'Metode', value: VIA_LABEL.username, inline: true })
+      .setDescription('✅ Akun ditemukan. Robux akan dikirim **langsung ke akun ini**, tanpa syarat join community.\nSilakan lanjut pilih jumlah Robux di bawah 👇')
+      .setFooter({ text: `Dicek ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB` })
+    if (avatar) embed.setThumbnail(avatar)
+    return { embeds: [embed], components: [usernameButtons({ change: true })], outcome: 'eligible', payout: null }
+  }
   const [membership, avatar, group] = await Promise.all([groupMembership(user.id), headshot(user.id), groupInfo()])
   const payout = membership ? await payoutEligibility(user.id) : null
   const outcome = !membership ? 'not-member' : payout.status
 
   const embed = new EmbedBuilder()
     .setColor(outcome === 'eligible' ? GREEN : outcome === 'unchecked' ? GOLD : RED)
-    .setAuthor({ name: 'Cek akun Roblox' })
+    .setAuthor({ name: 'Cek akun Roblox · Via Payouts' })
     .setTitle(`${user.displayName} (@${user.name})`)
     .setURL(profileUrl(user.id))
     .addFields(
@@ -231,12 +257,12 @@ async function verificationMessage(user) {
 const ownerMentions = () => OWNER_IDS.map((id) => `<@${id}>`).join(' ')
 
 /** Lanjutan setelah cek: tag owner, atau tutup tiket kalau tidak eligible */
-async function afterCheck(interaction, user, outcome, payout) {
+async function afterCheck(channel, user, outcome, payout) {
   if (outcome === 'eligible') {
-    await interaction.channel.send(orderSelectMessage(user.id, user.name))
+    await channel.send(orderSelectMessage(user.id, user.name, null, ticketVia(channel)))
   } else if (outcome === 'unchecked') {
     console.warn(`Cek payout gagal untuk ${user.name}:`, payout.reason)
-    await interaction.followUp({
+    await channel.send({
       content: `${ownerMentions()} buyer **${user.name}** sudah member. Cek eligible payout otomatis tidak tersedia, mohon **cek manual** di Roblox lalu pilih:`,
       allowedMentions: { users: OWNER_IDS },
       components: [new ActionRowBuilder().addComponents(
@@ -245,7 +271,6 @@ async function afterCheck(interaction, user, outcome, payout) {
       )],
     })
   } else if (outcome === 'ineligible') {
-    const channel = interaction.channel
     console.log(`Tiket ${channel.name}: ${user.name} tidak eligible (${payout.raw}), ditutup otomatis.`)
     deleteChannelLater(channel, AUTO_CLOSE_SECONDS * 1000, `Buyer ${user.name} belum eligible payout`)
   }
@@ -270,7 +295,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton()) {
       const [, action, arg] = interaction.customId.split(':')
-      if (action === 'open') return await openTicket(interaction)
+      if (action === 'open') return await startTicket(interaction, arg === 'username' ? 'username' : 'payout')
       if (action === 'username') return await askUsername(interaction)
       if (action === 'recheck') return await recheck(interaction, arg)
       if (action === 'close') return await confirmClose(interaction)
@@ -278,6 +303,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (action === 'close-no') return interaction.update({ content: 'Batal menutup tiket.', components: [] })
     }
 
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:start:')) {
+      return await createTicket(interaction, interaction.customId.split(':')[2] === 'username' ? 'username' : 'payout')
+    }
     if (interaction.isModalSubmit() && interaction.customId === 'ticket:username-modal') {
       return await submitUsername(interaction)
     }
@@ -293,17 +321,68 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 })
 
-async function openTicket(interaction) {
-  const { guild, user } = interaction
+const findOpenTicket = (guild, userId) =>
+  guild.channels.cache.find((ch) => ch?.type === ChannelType.GuildText && ticketOwnerId(ch) === userId)
+
+const usernameInput = () => new ActionRowBuilder().addComponents(
+  new TextInputBuilder()
+    .setCustomId('username')
+    .setLabel('Username Roblox (bukan display name)')
+    .setPlaceholder('contoh: lauserkd')
+    .setStyle(TextInputStyle.Short)
+    .setMinLength(3)
+    .setMaxLength(20)
+    .setRequired(true),
+)
+
+/** Klik tombol topup di panel → langsung popup username (harus < 3 detik, jadi tanpa request lain) */
+async function startTicket(interaction, via) {
+  if (via === 'username' && !VIA_USERNAME_ENABLED) {
+    await interaction.reply(ephemeral('👤 Topup **Via Username** segera hadir. Untuk sementara silakan pakai **Via Payouts**.'))
+    return autoDismiss(interaction, 15_000)
+  }
   if (!topupOpen) {
     await interaction.reply(ephemeral('🔴 Maaf, layanan topup sedang **tutup**. Silakan coba lagi nanti ya.'))
     return autoDismiss(interaction, 15_000)
   }
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+  const existing = findOpenTicket(interaction.guild, interaction.user.id)
+  if (existing) {
+    await interaction.reply(ephemeral(`Kamu masih punya tiket yang terbuka: ${existing}`))
+    return autoDismiss(interaction, 15_000)
+  }
+  const modal = new ModalBuilder().setCustomId(`ticket:start:${via}`).setTitle(`Topup ${VIA_LABEL[via]}`)
+  modal.addComponents(usernameInput())
+  return interaction.showModal(modal)
+}
 
-  // Satu orang satu tiket aktif
-  const channels = await guild.channels.fetch()
-  const existing = channels.find((ch) => ch?.type === ChannelType.GuildText && ticketOwnerId(ch) === user.id)
+/** Popup dikirim → cek username → buat tiket → hasil cek muncul di tiket */
+async function createTicket(interaction, via) {
+  const { guild, user } = interaction
+  const username = interaction.fields.getTextInputValue('username').trim().replace(/^@/, '')
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+  if (!isValidUsername(username)) {
+    await interaction.editReply('Username tidak valid. Gunakan 3–20 karakter: huruf, angka, atau garis bawah (_). Klik tombol topup lagi untuk mencoba.')
+    return autoDismiss(interaction, 20_000)
+  }
+  const roblox = await findUserByName(username)
+  if (!roblox) {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(RED).setTitle('Username tidak ditemukan')
+        .setDescription([
+          `Akun Roblox **${username}** tidak ditemukan. Pastikan yang dimasukkan adalah **username**, bukan display name.`,
+          '',
+          via === 'payout'
+            ? 'Klik tombol topup lagi untuk mencoba. Belum join community **2Kuli Project**? Join lewat tombol di bawah.'
+            : 'Klik tombol topup lagi untuk mencoba.',
+        ].join('\n'))],
+      // Tombol join community hanya relevan untuk Via Payouts
+      components: via === 'payout' ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel('Join community 2Kuli Project').setStyle(ButtonStyle.Link).setURL(GROUP_URL).setEmoji('🔗'),
+      )] : [],
+    })
+    return autoDismiss(interaction, 60_000)
+  }
+  const existing = findOpenTicket(guild, user.id)
   if (existing) {
     await interaction.editReply(`Kamu masih punya tiket yang terbuka: ${existing}`)
     return autoDismiss(interaction, 15_000)
@@ -315,7 +394,7 @@ async function openTicket(interaction) {
     name,
     type: ChannelType.GuildText,
     parent,
-    topic: `${TOPIC_PREFIX}${user.id}`,
+    topic: `${TOPIC_PREFIX}${user.id} · via:${via}`,
     permissionOverwrites: [
       { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
       { id: user.id, allow: MEMBER_PERMISSIONS },
@@ -323,19 +402,17 @@ async function openTicket(interaction) {
       ...STAFF_ROLES.map((id) => ({ id, allow: MEMBER_PERMISSIONS })),
     ],
   })
-
-  const embed = new EmbedBuilder()
-    .setColor(GOLD)
-    .setTitle('Tiket topup Robux')
-    .setDescription([
-      `Halo ${user}, terima kasih sudah order di **2Kuli**!`,
-      '',
-      'Klik tombol **Masukkan username Roblox** di bawah, lalu ketik username Roblox kamu (bukan display name).',
-      'Bot akan mengecek apakah akun kamu sudah join community **2Kuli Project**.',
-    ].join('\n'))
-  await channel.send({ content: `${user}`, embeds: [embed], components: [usernameButtons()] })
   await interaction.editReply(`Tiket kamu sudah dibuat: ${channel} (pesan ini hilang otomatis)`)
   autoDismiss(interaction, 15_000)
+
+  await channel.send({
+    content: `${user}`,
+    embeds: [new EmbedBuilder().setColor(GOLD).setTitle(`Tiket topup Robux · ${VIA_EMOJI[via]} ${VIA_LABEL[via]}`)
+      .setDescription(`Halo ${user}, terima kasih sudah order di **2Kuli**! Berikut hasil pengecekan akun Roblox kamu 👇`)],
+  })
+  const { outcome, payout, ...msg } = await verificationMessage(roblox, via)
+  await channel.send(msg)
+  await afterCheck(channel, roblox, outcome, payout)
 }
 
 // TICKET_CATEGORY_ID boleh berisi ID kategori ATAU ID channel (dipakai kategori induknya)
@@ -347,19 +424,35 @@ async function ticketParent(guild) {
   return ch.parentId || null
 }
 
+/** Pesanan di tiket ini sudah dikunci (buyer sudah klik Payment)? */
+async function orderLocked(channel) {
+  const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null)
+  return !!msgs?.some((m) => m.author.id === client.user.id && m.embeds?.[0]?.author?.name === 'Pesanan dikonfirmasi ✅')
+}
+
+/** Hapus tombol "Ganti username" dari pesan-pesan bot di tiket (dipanggil saat pesanan dikunci) */
+async function lockUsernameButtons(channel) {
+  const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null)
+  if (!msgs) return
+  for (const m of msgs.values()) {
+    if (m.author.id !== client.user.id) continue
+    const rows = m.components || []
+    if (!rows.some((r) => r.components?.some((c) => c.customId === 'ticket:username'))) continue
+    const kept = rows
+      .map((r) => r.components.filter((c) => c.customId !== 'ticket:username' && !c.customId?.startsWith('ticket:recheck')))
+      .filter((cs) => cs.length)
+      .map((cs) => new ActionRowBuilder().addComponents(cs.map((c) => ButtonBuilder.from(c))))
+    await m.edit({ components: kept }).catch(() => {})
+  }
+}
+
 async function askUsername(interaction) {
+  if (await orderLocked(interaction.channel)) {
+    return interaction.reply(ephemeral('Pesanan di tiket ini sudah dikunci, username tidak bisa diganti lagi.'))
+  }
   if (!canUseTicket(interaction)) return interaction.reply(ephemeral('Hanya pembuat tiket atau admin yang bisa melakukan ini.'))
   const modal = new ModalBuilder().setCustomId('ticket:username-modal').setTitle('Username Roblox')
-  modal.addComponents(new ActionRowBuilder().addComponents(
-    new TextInputBuilder()
-      .setCustomId('username')
-      .setLabel('Username Roblox (bukan display name)')
-      .setPlaceholder('contoh: lauserkd')
-      .setStyle(TextInputStyle.Short)
-      .setMinLength(3)
-      .setMaxLength(20)
-      .setRequired(true),
-  ))
+  modal.addComponents(usernameInput())
   return interaction.showModal(modal)
 }
 
@@ -386,21 +479,21 @@ async function submitUsername(interaction) {
       ],
     })
   }
-  const { outcome, payout, ...msg } = await verificationMessage(user)
+  const { outcome, payout, ...msg } = await verificationMessage(user, ticketVia(interaction.channel))
   await interaction.editReply(msg)
-  await afterCheck(interaction, user, outcome, payout)
+  await afterCheck(interaction.channel, user, outcome, payout)
 }
 
 async function recheck(interaction, robloxId) {
   if (!canUseTicket(interaction)) return interaction.reply(ephemeral('Hanya pembuat tiket atau admin yang bisa melakukan ini.'))
   await interaction.deferUpdate()
   const user = await findUserById(robloxId)
-  const { outcome, payout, ...msg } = await verificationMessage(user)
+  const { outcome, payout, ...msg } = await verificationMessage(user, ticketVia(interaction.channel))
   await interaction.editReply(msg)
   if (outcome === 'not-member') {
     await interaction.followUp(ephemeral('Masih belum terdeteksi sebagai member. Pastikan sudah klik **Join** di halaman community, lalu cek ulang beberapa detik lagi.'))
   } else {
-    await afterCheck(interaction, user, outcome, payout)
+    await afterCheck(interaction.channel, user, outcome, payout)
   }
 }
 
@@ -424,38 +517,45 @@ async function closeTicket(interaction) {
 }
 
 // ---------- Pesanan ----------
-const PRICE_PER_100 = 15_000
-const ROBUX_OPTIONS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2500, 5000, 7500, 10000]
-const priceOf = (robux) => (robux / 100) * PRICE_PER_100
+// Pricelist per metode: [jumlah Robux, harga Rp]
+const PRICES = {
+  payout: [[50, 7500], [100, 15000], [150, 22500], [200, 30000], [250, 37500], [300, 45000], [350, 52500], [400, 60000],
+    [450, 67500], [500, 75000], [1000, 150000], [1500, 225000], [2000, 300000], [3000, 450000], [4000, 600000],
+    [5000, 750000], [7500, 1125000], [10000, 1500000], [20000, 3000000], [30000, 4500000], [40000, 6000000], [50000, 7500000]],
+  username: [[50, 7750], [100, 15500], [150, 23250], [200, 31000], [250, 38750], [300, 46500], [350, 54250], [400, 62000],
+    [450, 69750], [500, 77500], [1000, 155000], [1500, 232500], [2000, 310000], [3000, 465000], [4000, 620000],
+    [5000, 775000], [7500, 1162500], [10000, 1550000], [20000, 3100000], [30000, 4650000], [40000, 6200000], [50000, 7750000]],
+}
+const priceOf = (robux, via = 'payout') => (PRICES[via] || PRICES.payout).find(([r]) => r === Number(robux))?.[1] ?? null
 const rupiah = (n) => 'Rp' + n.toLocaleString('id-ID')
 const robuxText = (n) => `R$ ${n.toLocaleString('id-ID')}`
 
 /** Step 1: pilih jumlah Robux */
-function orderSelectMessage(robloxId, robloxName, selected) {
+function orderSelectMessage(robloxId, robloxName, selected, via = 'payout') {
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setAuthor({ name: 'Langkah 1 · Pilih jumlah' })
     .setTitle('Mau topup berapa Robux?')
     .setDescription([
       `Akun tujuan: **${robloxName}**`,
-      `Harga: **${rupiah(PRICE_PER_100)} / 100 Robux**`,
+      `Metode: **${VIA_EMOJI[via]} ${VIA_LABEL[via]}**`,
+      ...(selected ? [`Pilihan sebelumnya: **${robuxText(selected)}** (boleh pilih lagi)`] : []),
       '',
       'Pilih jumlah Robux dari menu di bawah.',
     ].join('\n'))
   const menu = new StringSelectMenuBuilder()
     .setCustomId(`order:select:${robloxId}:${robloxName}`)
     .setPlaceholder('Pilih jumlah Robux…')
-    .addOptions(ROBUX_OPTIONS.map((n) => ({
-      label: `${robuxText(n)} · ${rupiah(priceOf(n))}`,
+    .addOptions(PRICES[via].map(([n, price]) => ({
+      label: `${robuxText(n)} · ${rupiah(price)}`,
       value: String(n),
       emoji: '💎',
-      default: n === selected,
     })))
   return { embeds: [embed], components: [new ActionRowBuilder().addComponents(menu)] }
 }
 
 /** Step 2: konfirmasi pesanan */
-function orderConfirmMessage(robloxId, robloxName, robux) {
+function orderConfirmMessage(robloxId, robloxName, robux, via = 'payout') {
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setAuthor({ name: 'Langkah 2 · Konfirmasi pesanan' })
@@ -463,7 +563,8 @@ function orderConfirmMessage(robloxId, robloxName, robux) {
     .addFields(
       { name: 'Akun Roblox', value: robloxName, inline: true },
       { name: 'Jumlah', value: `**${robuxText(robux)}**`, inline: true },
-      { name: 'Total bayar', value: `**${rupiah(priceOf(robux))}**`, inline: true },
+      { name: 'Total bayar', value: `**${rupiah(priceOf(robux, via))}**`, inline: true },
+      { name: 'Metode', value: `${VIA_EMOJI[via]} ${VIA_LABEL[via]}`, inline: true },
     )
     .setDescription('Cek lagi jumlah Robux dan totalnya. Kalau sudah benar, klik **Payment** untuk lanjut ke pembayaran.')
   const row = new ActionRowBuilder().addComponents(
@@ -481,20 +582,22 @@ async function handleOrder(interaction) {
     return interaction.reply(ephemeral(ownerOnly ? 'Hanya owner yang bisa memilih ini.' : 'Hanya pembuat tiket yang bisa mengatur pesanan ini.'))
   }
 
+  const via = ticketVia(interaction.channel)
   if (action === 'select') {
     const robux = Number(interaction.values[0])
-    return interaction.update(orderConfirmMessage(robloxId, robloxName, robux))
+    return interaction.update(orderConfirmMessage(robloxId, robloxName, robux, via))
   }
   if (action === 'edit') {
-    return interaction.update(orderSelectMessage(robloxId, robloxName, Number(robuxStr)))
+    return interaction.update(orderSelectMessage(robloxId, robloxName, Number(robuxStr), via))
   }
   if (action === 'pay') {
     const robux = Number(robuxStr)
-    const done = orderConfirmMessage(robloxId, robloxName, robux)
-    done.embeds[0].setColor(GREEN).setAuthor({ name: 'Pesanan dikonfirmasi ✅' }).setTitle(`${robuxText(robux)} · ${rupiah(priceOf(robux))}`)
+    const done = orderConfirmMessage(robloxId, robloxName, robux, via)
+    done.embeds[0].setColor(GREEN).setAuthor({ name: 'Pesanan dikonfirmasi ✅' }).setTitle(`${robuxText(robux)} · ${rupiah(priceOf(robux, via))}`)
       .setDescription('Pesanan sudah dikunci.')
     await interaction.update({ embeds: done.embeds, components: [] })
-    return interaction.channel.send(paymentMessage(robloxId, robloxName, robux))
+    await lockUsernameButtons(interaction.channel)
+    return interaction.channel.send(paymentMessage(robloxId, robloxName, robux, via))
   }
   if (action === 'cancel') {
     return interaction.reply({
@@ -508,7 +611,7 @@ async function handleOrder(interaction) {
   }
   if (action === 'approve') {
     await interaction.update({ content: `✅ Dicek manual oleh ${interaction.user}: eligible.`, components: [] })
-    return interaction.channel.send(orderSelectMessage(robloxId, robloxName))
+    return interaction.channel.send(orderSelectMessage(robloxId, robloxName, null, via))
   }
   if (action === 'reject') {
     await interaction.update({ content: `❌ Dicek manual oleh ${interaction.user}: tidak eligible.`, components: [] })
@@ -530,12 +633,12 @@ const BANK = {
 const METHOD_LABEL = { bank: 'Transfer bank', qris: 'QRIS' }
 
 /** Step 3a: pilih metode pembayaran */
-function paymentMessage(robloxId, robloxName, robux) {
+function paymentMessage(robloxId, robloxName, robux, via = 'payout') {
   const ids = `${robloxId}:${robloxName}:${robux}`
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setAuthor({ name: 'Langkah 3 · Pilih metode pembayaran' })
-    .setTitle(`Total bayar: ${rupiah(priceOf(robux))}`)
+    .setTitle(`Total bayar: ${rupiah(priceOf(robux, via))}`)
     .setDescription([
       `Pesanan: **${robuxText(robux)}** untuk akun **${robloxName}**`,
       '',
@@ -552,9 +655,9 @@ function paymentMessage(robloxId, robloxName, robux) {
 }
 
 /** Step 3b: detail pembayaran sesuai metode */
-function paymentDetailMessage(method, robloxId, robloxName, robux) {
+function paymentDetailMessage(method, robloxId, robloxName, robux, via = 'payout') {
   const ids = `${robloxId}:${robloxName}:${robux}`
-  const total = rupiah(priceOf(robux))
+  const total = rupiah(priceOf(robux, via))
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setAuthor({ name: `Langkah 3 · Pembayaran via ${METHOD_LABEL[method]}` })
@@ -624,15 +727,16 @@ async function handlePayment(interaction) {
   const proofMsgId = action === 'done' ? null : p5
   const method = (action === 'done' ? p5 : p6) || 'bank'
   const robux = Number(robuxStr)
-  const amount = priceOf(robux)
+  const via = ticketVia(interaction.channel)
+  const amount = priceOf(robux, via)
   const buyerId = ticketOwnerId(interaction.channel)
 
   // Buyer memilih / mengganti metode pembayaran
   if (['bank', 'qris', 'choose'].includes(action)) {
     if (!canUseTicket(interaction)) return interaction.reply(ephemeral('Hanya pembuat tiket yang bisa memilih metode pembayaran.'))
     if (action === 'qris' && !QRIS_ENABLED) return interaction.reply(ephemeral('QRIS belum tersedia, silakan pakai transfer bank.'))
-    if (action === 'choose') return interaction.update(paymentMessage(robloxId, robloxName, robux))
-    return interaction.update(paymentDetailMessage(action, robloxId, robloxName, robux))
+    if (action === 'choose') return interaction.update(paymentMessage(robloxId, robloxName, robux, via))
+    return interaction.update(paymentDetailMessage(action, robloxId, robloxName, robux, via))
   }
 
   // Buyer klik "Sudah bayar"
@@ -687,7 +791,8 @@ async function handlePayment(interaction) {
         displayName: roblox.displayName,
         robux,
         amount,
-        notes: `${METHOD_LABEL[method] || 'Transfer'} · Tiket Discord #${interaction.channel.name}${buyer ? ` · ${buyer.username}` : ''}`,
+        via,
+        notes: `${VIA_LABEL[via]} · ${METHOD_LABEL[method] || 'Transfer'} · Tiket Discord #${interaction.channel.name}${buyer ? ` · ${buyer.username}` : ''}`,
         proof: proof ? { url: proof.attachment.url, contentType: proof.attachment.contentType } : null,
       })
     } catch (e) {
@@ -718,7 +823,7 @@ async function handlePayment(interaction) {
     const tx = result.row
     const by = tx.processed ? await dashboardNameById(tx.processed_by) : null
     return interaction.channel.send({
-      ...processMessage(tx, robloxName, robux, tx.processed ? { name: by || 'owner', at: tx.processed_at } : null),
+      ...processMessage(tx, robloxName, robux, tx.processed ? { name: by || 'owner', at: tx.processed_at } : null, via),
       content: tx.processed ? '' : ownerMentions(),
       allowedMentions: { users: OWNER_IDS },
     })
@@ -746,14 +851,14 @@ async function handlePayment(interaction) {
 const fmtTime = (iso) => new Date(iso).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
 
 /** Pesan untuk owner. processed: null | { name, at, discordId? } */
-function processMessage(tx, robloxName, robux, processed) {
+function processMessage(tx, robloxName, robux, processed, via = 'payout') {
   const embed = new EmbedBuilder()
     .setColor(processed ? GREEN : GOLD)
     .setAuthor({ name: 'Untuk owner · Proses pesanan' })
     .setTitle(`${robuxText(robux)} → ${robloxName}`)
     .setDescription(processed
       ? `✅ **Diproses oleh ${processed.name}**${processed.discordId ? ` (<@${processed.discordId}>)` : ''}${processed.at ? ` · ${fmtTime(processed.at)}` : ''}\nCeklis *Diproses* di dashboard sudah tercentang.`
-      : `Kirim Robux lewat payout community, lalu klik **Proses**.\nYang pertama klik akan tercatat sebagai pemroses di dashboard (ceklis *Diproses*).\n\n${ownerMentions()}`)
+      : `Kirim Robux ${via === 'username' ? 'langsung ke akun buyer (via username, akun Premium)' : 'lewat payout community'}, lalu klik **Proses**.\nYang pertama klik akan tercatat sebagai pemroses di dashboard (ceklis *Diproses*).\n\n${ownerMentions()}`)
   const button = new ButtonBuilder()
     .setCustomId(`proc:${tx.id}:${robloxName}:${robux}`)
     .setStyle(processed ? ButtonStyle.Secondary : ButtonStyle.Success)
@@ -786,7 +891,7 @@ async function syncProcessButton(tx) {
   const wanted = tx.processed ? `Diproses oleh ${name}` : 'Proses'
   if (button.label === wanted && button.disabled === !!tx.processed) return // sudah sesuai
 
-  await msg.edit(processMessage({ id: tx.id }, robloxName, Number(robuxStr), tx.processed ? { name, at: tx.processed_at } : null))
+  await msg.edit(processMessage({ id: tx.id }, robloxName, Number(robuxStr), tx.processed ? { name, at: tx.processed_at } : null, ticketVia(channel)))
   console.log(`Sync tiket #${channel.name}: ${wanted}`)
 }
 
@@ -800,12 +905,12 @@ async function handleProcess(interaction) {
   const r = await markProcessed(txId, interaction.user.id)
 
   if (r.ok) {
-    await interaction.editReply(processMessage({ id: txId }, robloxName, robux, { name: r.name, at: new Date().toISOString(), discordId: interaction.user.id }))
+    await interaction.editReply(processMessage({ id: txId }, robloxName, robux, { name: r.name, at: new Date().toISOString(), discordId: interaction.user.id }, ticketVia(interaction.channel)))
     return
   }
   if (r.reason === 'already') {
     // Sudah diproses (dari Discord atau dari website) → kunci tombolnya
-    await interaction.editReply(processMessage({ id: txId }, robloxName, robux, { name: r.name, at: r.at }))
+    await interaction.editReply(processMessage({ id: txId }, robloxName, robux, { name: r.name, at: r.at }, ticketVia(interaction.channel)))
     return interaction.followUp(ephemeral(`Pesanan ini sudah diproses oleh **${r.name}**.`))
   }
   const why = {
@@ -925,6 +1030,7 @@ async function finishTesti(channel, rating, message, auto) {
     .addFields({ name: 'Membeli', value: state.robux ? `**${robuxText(state.robux)}**` : '–', inline: true })
     .setTimestamp(new Date())
   if (message) embed.setDescription(`“${message}”`)
+  else if (auto) embed.setDescription('✅ Pesanan selesai dan Robux sudah dikirim. Terima kasih sudah order di 2Kuli!')
   if (auto) embed.setFooter({ text: 'Rating otomatis' })
   const target = await testimoniChannel(channel.guild)
   await target.send({ content: '@everyone', embeds: [embed], allowedMentions: { parse: ['everyone'] } })

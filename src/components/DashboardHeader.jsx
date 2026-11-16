@@ -4,6 +4,7 @@ import Logo from './Logo'
 const TABS = [
   { to: '/owner/dashboard', label: 'Transaksi', end: true },
   { to: '/owner/dashboard/update', label: 'Update' },
+  { to: '/owner/dashboard/payouts', label: 'Payouts' },
 ]
 
 // Header dashboard owner + menu tab (Transaksi / Update)
@@ -17,7 +18,7 @@ export default function DashboardHeader({ name, email, onSignOut, showTabs = tru
             <nav className="flex items-center gap-1 h-16" aria-label="Menu dashboard">
               {TABS.map((t) => (
                 <NavLink key={t.to} to={t.to} end={t.end}
-                  className={({ isActive }) => `relative h-full inline-flex items-center px-3 text-sm font-semibold transition-colors ${
+                  className={({ isActive }) => `relative h-full inline-flex items-center px-2 sm:px-3 text-[13px] sm:text-sm font-semibold transition-colors ${
                     isActive ? 'text-yellow after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-yellow' : 'text-muted hover:text-fg'}`}>
                   {t.label}
                 </NavLink>

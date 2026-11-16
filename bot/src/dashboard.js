@@ -68,7 +68,7 @@ export async function recordTransaction(order) {
   const who = await getRecorder()
   const proof_path = order.proof ? await uploadProof(order.proof.url, order.proof.contentType) : null
   const now = new Date().toISOString()
-  const { data, error } = await supabase.from('robux_transactions').insert({
+  const row = {
     purchase_date: todayWIB(),
     buyer_username: order.robloxName,
     buyer_user_id: order.robloxId,
@@ -84,7 +84,14 @@ export async function recordTransaction(order) {
     payment_verified_at: now,
     payment_verified_by: who?.id ?? null,
     processed: false,
-  }).select().single()
+    via: order.via || 'payout',
+  }
+  let { data, error } = await supabase.from('robux_transactions').insert(row).select().single()
+  // Migrasi 012 belum dijalankan (kolom via belum ada) → simpan tanpa kolom via
+  if (error && /\bvia\b/.test(error.message)) {
+    delete row.via
+    ;({ data, error } = await supabase.from('robux_transactions').insert(row).select().single())
+  }
 
   if (error) {
     if (proof_path) await supabase.storage.from(BUCKET).remove([proof_path]).catch(() => {})

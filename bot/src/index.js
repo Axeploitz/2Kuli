@@ -1,7 +1,7 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, Events,
   StringSelectMenuBuilder,
-  GatewayIntentBits, MessageFlags, ModalBuilder, OAuth2Scopes, PermissionFlagsBits,
+  GatewayIntentBits, MessageFlags, SnowflakeUtil, ModalBuilder, OAuth2Scopes, PermissionFlagsBits,
   SlashCommandBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js'
 import {
@@ -9,6 +9,8 @@ import {
 } from './roblox.js'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { extname } from 'node:path'
+import { CURRENCIES, convertIdr, formatMoney } from './currency.js'
 import {
   dashboardEnabled, dashboardNameById, getSetting, getTransactionByRef, markProcessed, recordTransaction, setSetting, watchSettings, watchTransactions,
 } from './dashboard.js'
@@ -88,6 +90,8 @@ client.once(Events.ClientReady, async (c) => {
   await refreshPanel()
   console.log(dashboardEnabled ? '🔗 Terhubung ke dashboard website (Supabase).' : '⚠️  SUPABASE_SECRET_KEY belum diisi: transaksi belum tercatat otomatis ke dashboard.')
   console.log(existsSync(QRIS_FILE) ? '🧾 QRIS siap.' : `⚠️  QRIS belum ada: taruh gambar di ${QRIS_FILE}`)
+  setInterval(() => sweepIdleTickets().catch((e) => console.error('Auto close gagal:', e.message)), 60_000)
+  console.log(`⏰ Auto close tiket aktif: ${Math.round(IDLE_CLOSE_MS / 60_000)} menit tanpa aktivitas.`)
   console.log('Link undang bot:', c.generateInvite({ scopes: [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands], permissions: BOT_PERMISSIONS }))
 })
 
@@ -102,10 +106,89 @@ const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral })
 /** Hapus channel tiket setelah jeda; aman kalau channel sudah terhapus duluan */
 function deleteChannelLater(channel, ms, reason) {
   if (!channel) return
+  closingTickets.add(channel.id)
   setTimeout(() => {
     channel.delete(reason).catch((e) => { if (e.code !== 10003) console.error('Hapus channel gagal:', e.message) })
   }, ms)
 }
+
+// ---------- Auto close tiket yang tidak ada aktivitas ----------
+// Aktivitas = pesan dari manusia atau klik tombol/menu di tiket (pesan bot tidak dihitung).
+// Tiket yang buyer-nya sudah klik "Sudah bayar" tidak pernah ditutup otomatis.
+const IDLE_CLOSE_MS = Number(process.env.IDLE_CLOSE_MINUTES || 15) * 60_000
+const IDLE_WARN_BEFORE_MS = 3 * 60_000
+const lastActivity = new Map() // channelId -> timestamp
+const idleWarnings = new Map() // channelId -> pesan peringatan
+const paidTickets = new Set()
+const closingTickets = new Set()
+const PAID_MARKERS = new Set([
+  'Menunggu konfirmasi pembayaran', 'Pembayaran dikonfirmasi ✅', 'Pembayaran tidak valid ❌',
+  'Langkah 4 · Pesanan diterima', 'Untuk owner · Proses pesanan', 'Langkah terakhir · Testimoni',
+])
+
+function touchTicket(channel) {
+  if (!ticketOwnerId(channel)) return
+  lastActivity.set(channel.id, Date.now())
+  const warning = idleWarnings.get(channel.id)
+  if (warning) {
+    idleWarnings.delete(channel.id)
+    warning.delete().catch(() => {})
+  }
+}
+
+async function ticketIsPaid(channel) {
+  if (paidTickets.has(channel.id)) return true
+  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null)
+  const paid = !!msgs?.some((m) => m.author.id === client.user.id && m.embeds?.some((e) => PAID_MARKERS.has(e.author?.name)))
+  if (paid) paidTickets.add(channel.id)
+  return paid
+}
+
+async function sweepIdleTickets() {
+  const guild = client.guilds.cache.get(GUILD_ID)
+  if (!guild) return
+  const now = Date.now()
+  for (const channel of guild.channels.cache.values()) {
+    if (channel.type !== ChannelType.GuildText || !ticketOwnerId(channel)) continue
+    if (closingTickets.has(channel.id) || paidTickets.has(channel.id)) continue
+    if (!lastActivity.has(channel.id)) {
+      // Tiket yang sudah ada saat bot (re)start: kalau sudah lama diam, beri peringatan + waktu penuh
+      const last = channel.lastMessageId ? SnowflakeUtil.timestampFrom(channel.lastMessageId) : channel.createdTimestamp
+      if (now - (last || now) < IDLE_CLOSE_MS - IDLE_WARN_BEFORE_MS) {
+        lastActivity.set(channel.id, last || now)
+      } else {
+        lastActivity.set(channel.id, now)
+        if (!(await ticketIsPaid(channel))) await warnIdle(channel, IDLE_CLOSE_MS)
+        continue
+      }
+    }
+    const idle = now - lastActivity.get(channel.id)
+    if (idle < IDLE_CLOSE_MS - IDLE_WARN_BEFORE_MS) continue
+    if (await ticketIsPaid(channel)) continue
+
+    if (idle >= IDLE_CLOSE_MS) {
+      idleWarnings.delete(channel.id)
+      await channel.send(`⏰ Tiket ditutup otomatis karena tidak ada aktivitas selama ${Math.round(IDLE_CLOSE_MS / 60_000)} menit. Kalau masih mau order, silakan buka tiket baru ya 🙏`).catch(() => {})
+      deleteChannelLater(channel, 10_000, 'Auto close: tidak ada aktivitas')
+    } else if (!idleWarnings.has(channel.id)) {
+      await warnIdle(channel, IDLE_CLOSE_MS - idle)
+    }
+  }
+}
+
+async function warnIdle(channel, remainingMs) {
+  const buyer = ticketOwnerId(channel)
+  const minutes = Math.max(1, Math.round(remainingMs / 60_000))
+  const warning = await channel.send({
+    content: `<@${buyer}> ⏳ Tiket ini akan **ditutup otomatis dalam ${minutes} menit** kalau tidak ada aktivitas. Lanjutkan pesanan atau kirim pesan apa saja untuk menahannya.`,
+    allowedMentions: { users: [buyer] },
+  }).catch(() => null)
+  if (warning) idleWarnings.set(channel.id, warning)
+}
+
+client.on(Events.MessageCreate, (message) => {
+  if (!message.author.bot) touchTicket(message.channel)
+})
 
 // Hapus otomatis balasan "Only you can see this" supaya tidak menumpuk
 const AUTO_DISMISS_MS = 10_000
@@ -279,6 +362,7 @@ async function afterCheck(channel, user, outcome, payout) {
 // ---------- Handler ----------
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    touchTicket(interaction.channel)
     if (interaction.isChatInputCommand() && interaction.commandName === 'testi') return await startTesti(interaction)
     if (interaction.customId?.startsWith('testi:')) return await handleTesti(interaction)
 
@@ -292,6 +376,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.customId?.startsWith('order:')) return await handleOrder(interaction)
     if (interaction.customId?.startsWith('pay:')) return await handlePayment(interaction)
     if (interaction.customId?.startsWith('proc:')) return await handleProcess(interaction)
+    if (interaction.customId?.startsWith('fx:')) return await handleCurrency(interaction)
 
     if (interaction.isButton()) {
       const [, action, arg] = interaction.customId.split(':')
@@ -518,10 +603,10 @@ async function closeTicket(interaction) {
 
 // ---------- Pesanan ----------
 // Pricelist per metode: [jumlah Robux, harga Rp]
+const ROBUX_AMOUNTS = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000, 20000, 30000, 40000, 50000]
 const PRICES = {
-  payout: [[50, 7500], [100, 15000], [150, 22500], [200, 30000], [250, 37500], [300, 45000], [350, 52500], [400, 60000],
-    [450, 67500], [500, 75000], [1000, 150000], [1500, 225000], [2000, 300000], [3000, 450000], [4000, 600000],
-    [5000, 750000], [7500, 1125000], [10000, 1500000], [20000, 3000000], [30000, 4500000], [40000, 6000000], [50000, 7500000]],
+  // Via Payouts: Rp7.250 per 50 Robux (Rp145/Robux)
+  payout: ROBUX_AMOUNTS.map((r) => [r, r * 145]),
   username: [[50, 7750], [100, 15500], [150, 23250], [200, 31000], [250, 38750], [300, 46500], [350, 54250], [400, 62000],
     [450, 69750], [500, 77500], [1000, 155000], [1500, 232500], [2000, 310000], [3000, 465000], [4000, 620000],
     [5000, 775000], [7500, 1162500], [10000, 1550000], [20000, 3100000], [30000, 4650000], [40000, 6200000], [50000, 7750000]],
@@ -651,7 +736,7 @@ function paymentMessage(robloxId, robloxName, robux, via = 'payout') {
       .setDisabled(!QRIS_ENABLED),
     new ButtonBuilder().setCustomId('order:cancel').setLabel('Cancel pesanan').setStyle(ButtonStyle.Danger).setEmoji('✖️'),
   )
-  return { embeds: [embed], components: [row], files: [], attachments: [] }
+  return { embeds: [embed], components: [row, currencyRow(priceOf(robux, via))], files: [], attachments: [] }
 }
 
 /** Step 3b: detail pembayaran sesuai metode */
@@ -691,8 +776,9 @@ function paymentDetailMessage(method, robloxId, robloxName, robux, via = 'payout
       '3. Klik tombol **Sudah bayar**',
     ].join('\n'))
     if (hasQris) {
-      embed.setImage('attachment://qris.png')
-      files = [{ attachment: QRIS_FILE, name: 'qris.png' }]
+      const qrisName = `qris${extname(QRIS_FILE) || '.png'}`
+      embed.setImage(`attachment://${qrisName}`)
+      files = [{ attachment: QRIS_FILE, name: qrisName }]
     }
   }
 
@@ -701,7 +787,39 @@ function paymentDetailMessage(method, robloxId, robloxName, robux, via = 'payout
     new ButtonBuilder().setCustomId(`pay:choose:${ids}`).setLabel('Ganti metode').setStyle(ButtonStyle.Secondary).setEmoji('🔁'),
     new ButtonBuilder().setCustomId('order:cancel').setLabel('Cancel pesanan').setStyle(ButtonStyle.Danger).setEmoji('✖️'),
   )
-  return { embeds: [embed], components: [row], files, attachments: [] }
+  return { embeds: [embed], components: [row, currencyRow(priceOf(robux, via))], files, attachments: [] }
+}
+
+/** Tombol konversi harga ke 5 mata uang (kurs live) */
+function currencyRow(idr) {
+  return new ActionRowBuilder().addComponents(Object.entries(CURRENCIES).map(([code, c]) =>
+    new ButtonBuilder().setCustomId(`fx:${code}:${idr}`).setLabel(code).setEmoji(c.flag).setStyle(ButtonStyle.Secondary)))
+}
+
+async function handleCurrency(interaction) {
+  const [, code, idrStr] = interaction.customId.split(':')
+  const idr = Number(idrStr)
+  const c = CURRENCIES[code]
+  if (!c || !idr) return interaction.reply(ephemeral('Mata uang tidak dikenal.'))
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+  try {
+    const fx = await convertIdr(idr, code)
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setAuthor({ name: `${c.flag} Konversi ke ${c.name}` })
+      .setTitle(`${rupiah(idr)} ≈ ${formatMoney(fx.amount, code)}`)
+      .addFields(
+        { name: 'Kurs', value: `1 ${code} = ${rupiah(Math.round(fx.idrPerUnit))}`, inline: true },
+        { name: 'Negara', value: c.country, inline: true },
+      )
+      .setDescription('Pembayaran tetap dalam **Rupiah** sesuai total di atas. Angka ini hanya perkiraan, bisa beda sedikit dengan kurs bank / e-wallet kamu.')
+      .setFooter({ text: `Kurs live · ${fx.source}` })
+      .setTimestamp(fx.updatedAt)
+    await interaction.editReply({ embeds: [embed] })
+  } catch (err) {
+    await interaction.editReply(`⚠️ ${err.message}`)
+  }
+  return autoDismiss(interaction, 60_000)
 }
 
 /** Screenshot bukti terbaru yang dikirim buyer di channel tiket */

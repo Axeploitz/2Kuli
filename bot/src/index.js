@@ -605,8 +605,8 @@ async function closeTicket(interaction) {
 // Pricelist per metode: [jumlah Robux, harga Rp]
 const ROBUX_AMOUNTS = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000, 20000, 30000, 40000, 50000]
 const PRICES = {
-  // Via Payouts: Rp7.250 per 50 Robux (Rp145/Robux)
-  payout: ROBUX_AMOUNTS.map((r) => [r, r * 145]),
+  // Via Payouts: Rp14.250 per 100 Robux (Rp142,5/Robux; semua jumlah kelipatan 50 jadi hasilnya bulat)
+  payout: ROBUX_AMOUNTS.map((r) => [r, (r * 14250) / 100]),
   username: [[50, 7750], [100, 15500], [150, 23250], [200, 31000], [250, 38750], [300, 46500], [350, 54250], [400, 62000],
     [450, 69750], [500, 77500], [1000, 155000], [1500, 232500], [2000, 310000], [3000, 465000], [4000, 620000],
     [5000, 775000], [7500, 1162500], [10000, 1550000], [20000, 3100000], [30000, 4650000], [40000, 6200000], [50000, 7750000]],
